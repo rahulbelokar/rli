@@ -1,0 +1,108 @@
+--SQL Server Inventory
+
+
+DECLARE @rootDir NVARCHAR(512), @CLR VARCHAR(15), @MinMemory SQL_VARIANT, @MaxMemory SQL_VARIANT, @verIndex INT, @SSacc NVARCHAR(50), @SSAacc NVARCHAR(50), @BinnDir NVARCHAR(150), @InstantFileInit VARCHAR(10)
+DECLARE @MemColName VARCHAR(25), @MemCommand NVARCHAR(1000), @MemSize BIGINT, @SystemManufacturer VARCHAR(128), @BIOSVendor VARCHAR(128), @BIOSVersion VARCHAR(128), @BIOSReleaseDate VARCHAR(128), @ProcessorNameString VARCHAR(128), @ProductName VARCHAR(128), @WVersion VARCHAR(128), @CurrentVersion VARCHAR(128), @CurrentBuild VARCHAR(128), @CSDVersion VARCHAR(128), @Domain VARCHAR(100)
+DECLARE @hostNameTable TABLE ([HostName] SQL_VARIANT)
+
+
+/*** Host Name ***/
+IF (SELECT SERVERPROPERTY('IsClustered')) = 1
+	INSERT INTO @hostNameTable SELECT NodeName FROM sys.dm_os_cluster_nodes
+ELSE
+	INSERT INTO @hostNameTable SELECT SERVERPROPERTY('ComputerNamePhysicalNetBIOS')
+/*** CLR Version ***/
+SELECT @CLR = CAST(SERVERPROPERTY('BuildClrVersion') AS VARCHAR)
+/*** Product Trim ***/
+IF (SELECT CHARINDEX (' -',@@VERSION,1)-1) < (SELECT CHARINDEX (' (',@@VERSION,1)-1)
+	SELECT @verIndex = CHARINDEX (' -',@@VERSION,1)-1
+ELSE
+	SELECT @verIndex = CHARINDEX (' (',@@VERSION,1)-1
+/*** Memory ***/
+SELECT @MemColName = name from sys.all_columns WHERE object_id = (SELECT object_id FROM sys.all_objects WHERE name LIKE 'dm_os_sys_info') AND name LIKE '%physical_memory%'
+SELECT @MemCommand = 'SELECT @MemSize = ' + @MemColName + ' FROM sys.dm_os_sys_info'
+EXEC sp_executesql @MemCommand, N'@MemSize bigint output', @MemSize OUTPUT;
+IF (SELECT @MemColName) = 'physical_memory_in_bytes'
+	SET @MemSize = @MemSize/1024
+/*** Instance Memory ***/
+SET @MinMemory = (SELECT value_in_use FROM sys.configurations WHERE configuration_id = 1543)
+SET @MaxMemory = (SELECT value_in_use FROM sys.configurations WHERE configuration_id = 1544)
+/*** Root Directory ***/
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\MSSQLServer\Setup', N'SQLPath', @rootDir OUTPUT;
+/*** Service Accounts & Binn Directory ***/
+IF (SELECT CAST(LEFT(CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR),4) AS FLOAT)) <> 10.0 
+BEGIN
+	SELECT @SSacc = service_account,
+	@BinnDir = SUBSTRING(filename,2,CHARINDEX('sqlservr.exe',filename)-2)
+	FROM sys.dm_server_services
+	WHERE servicename LIKE 'SQL Server (%'
+	SELECT @SSAacc = service_account
+	FROM sys.dm_server_services
+	WHERE servicename LIKE 'SQL Server Agent (%'
+END
+ELSE
+BEGIN
+	SET @SSacc = NULL
+	SET @SSAacc = NULL
+	SET @BinnDir = NULL
+END
+/*** Machine Informations ***/
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\BIOS', N'SystemManufacturer', @SystemManufacturer OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\BIOS', N'BIOSVendor', @BIOSVendor OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\BIOS', N'BIOSVersion', @BIOSVersion OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\CentralProcessor\0', N'ProcessorNameString', @ProcessorNameString OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\Windows NT\CurrentVersion', N'ProductName', @ProductName OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\Windows NT\CurrentVersion', N'CurrentVersion', @CurrentVersion OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\Windows NT\CurrentVersion', N'CurrentBuild', @CurrentBuild OUTPUT;
+SELECT @WVersion = @CurrentVersion + '.' + @CurrentBuild
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\Windows NT\CurrentVersion', N'CSDVersion', @CSDVersion OUTPUT;
+EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SYSTEM\ControlSet001\Services\Tcpip\Parameters\', N'Domain', @Domain OUTPUT;
+
+
+/*** Instance Informations ***/
+SELECT 
+SERVERPROPERTY('ServerName') AS 'InstanceName',
+exc.local_net_address AS 'Instance_IP', 
+exc.local_tcp_port AS 'Port',
+hn.[HostName],
+	CASE   
+		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsClustered'),0)) = 0 THEN exc.local_net_address 
+		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN NULL 
+	END
+	AS [Host_IP],
+	CASE   
+		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsClustered'),0)) = 0 OR
+			 (SELECT SERVERPROPERTY('IsHadrEnabled')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsHadrEnabled'),0)) = 0 THEN 'Stand-Alone'  
+		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN 'Cluster'   
+		WHEN (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 THEN 'AlwaysOn'
+		WHEN (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 AND (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN 'Cluster&AlwaysOn'  
+	END 
+	AS 'HighAvailability',
+SERVERPROPERTY('Collation') AS Collation,
+LEFT ( @@VERSION , @verIndex) AS 'Product',
+SERVERPROPERTY('ProductVersion') AS 'ProductVersion',
+SERVERPROPERTY('ProductLevel') AS 'SP_Level',
+ISNULL(SERVERPROPERTY('ProductUpdateLevel'),0) AS 'CU_Level',
+SUBSTRING(@CLR,2,LEN(@CLR)) AS CLR_Version,
+SERVERPROPERTY('Edition') AS Edition,
+@SystemManufacturer AS SystemManufacturer,
+osinf.cpu_count AS 'CPU', 
+@MemSize/1024 AS Memory,
+@MinMemory AS 'MinMemory(MB)', 
+@MaxMemory AS 'MaxMemory(MB)',
+@SSacc AS 'SQL_Server_Account', 
+@SSAacc AS 'SQL_Server_Agent_Account', 
+@BinnDir AS 'Instance_Binn_Directory',
+@rootDir AS 'Instance_Root_Directory',
+SERVERPROPERTY('InstanceDefaultDataPath') AS 'Instance_Data_Directory',
+SERVERPROPERTY('InstanceDefaultLogPath') AS 'Instance_Log_Directory',
+@ProductName AS OperatingSystem, 
+@WVersion AS WindowsVersion, 
+@CSDVersion AS Windows_SP_Level,
+@ProcessorNameString AS ProcessorModel,
+@BIOSVendor AS BIOS_Vendor,
+@BIOSVersion AS BIOS_Version,
+@Domain AS Domain
+FROM @hostNameTable hn, sys.dm_exec_connections exc, sys.dm_os_sys_info osinf
+WHERE  exc.session_id = @@SPID
+ORDER BY hn.[HostName]
