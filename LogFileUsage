@@ -1,0 +1,59 @@
+CREATE TABLE #FreeSpace_Temp ([physical_name] NVARCHAR(300), [FreeSpaceMB] FLOAT)
+INSERT INTO #FreeSpace_Temp
+	EXEC sp_MSforeachdb '
+	USE [?]
+	SELECT physical_name, 
+	size/128 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128 AS FreeSpaceMB 
+	FROM sys.database_files'
+
+CREATE TABLE #AutoGrow_Temp ([physical_name] NVARCHAR(300), [growth] BIGINT)
+INSERT INTO #AutoGrow_Temp
+	SELECT physical_name, growth FROM sys.master_files WHERE is_percent_growth = 1
+	UNION ALL
+	SELECT physical_name, 0 FROM sys.master_files WHERE is_percent_growth = 0
+
+CREATE TABLE #RecoveryModel_Temp ([name] NVARCHAR(100), [RecoveryModel] VARCHAR(25))
+INSERT INTO #RecoveryModel_Temp
+	SELECT name,recovery_model_desc FROM sys.databases
+
+IF (SELECT COUNT(*)
+FROM	(
+		SELECT DB_NAME(database_id) AS DatabaseName, Name AS LogicalName, type_desc AS Type, 'Not Applicable' AS Filegroup, mf.Physical_Name, CAST(size AS bigint)*8/1024 AS InitialSizeMB,	mf.growth*8/1024 AS AutoGrowthInMB,	agrow.growth AS AutoGrowthInPercent, max_size/128 AS MaxsizeMB 
+		FROM sys.master_files mf
+		LEFT JOIN #AutoGrow_Temp agrow	ON mf.Physical_Name = agrow.physical_name
+		WHERE mf.physical_name like '%.ldf'
+	) dbinfo
+LEFT JOIN #FreeSpace_Temp frees ON dbinfo.Physical_Name = frees.physical_name
+LEFT JOIN #RecoveryModel_Temp rmod ON dbinfo.DatabaseName = rmod.name
+WHERE dbinfo.DatabaseName NOT IN ('master','model','msdb','tempdb') 
+AND ((dbinfo.AutoGrowthInMB + dbinfo.AutoGrowthInPercent) <> 0)
+AND dbinfo.InitialSizeMB/1024 > 25 ) > 0
+BEGIN
+
+SELECT @@SERVERNAME AS InstanceName, dbinfo.DatabaseName, dbinfo.LogicalName, rmod.RecoveryModel, dbinfo.physical_name as 'DatabaseFilePath', CAST(((dbinfo.InitialSizeMB-frees.FreeSpaceMB)*100/dbinfo.InitialSizeMB) AS DECIMAL(5,2)) AS 'Usage%', dbinfo.InitialSizeMB, frees.FreeSpaceMB, (dbinfo.InitialSizeMB-frees.FreeSpaceMB) AS TotalSizeMB/*, dbinfo.AutoGrowthInMB, dbinfo.AutoGrowthInPercent, dbinfo.MaxsizeMB */
+,'DBCC SHRINKFILE(N''' + dbinfo.LogicalName + ''',0,TRUNCATEONLY)' AS 'ShrinkCommand'
+FROM	(
+		SELECT DB_NAME(database_id) AS DatabaseName,
+		Name AS LogicalName,
+		type_desc AS Type,
+		'Not Applicable' AS Filegroup,
+		mf.Physical_Name, 
+		CAST(size AS bigint)*8/1024 AS InitialSizeMB,
+		mf.growth*8/1024 AS AutoGrowthInMB,
+		agrow.growth AS AutoGrowthInPercent,
+		max_size/128 AS MaxsizeMB
+		FROM sys.master_files mf
+		LEFT JOIN #AutoGrow_Temp agrow
+		ON mf.Physical_Name = agrow.physical_name
+		WHERE mf.physical_name like '%.ldf'
+	) dbinfo
+LEFT JOIN #FreeSpace_Temp frees
+ON dbinfo.Physical_Name = frees.physical_name
+LEFT JOIN #RecoveryModel_Temp rmod
+ON dbinfo.DatabaseName = rmod.name
+WHERE dbinfo.DatabaseName NOT IN ('master','model','msdb','tempdb') 
+AND ((dbinfo.AutoGrowthInMB + dbinfo.AutoGrowthInPercent) <> 0)
+AND dbinfo.InitialSizeMB/1024 > 25 
+END
+
+DROP TABLE #FreeSpace_Temp, #AutoGrow_Temp, #RecoveryModel_Temp
