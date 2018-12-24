@@ -1,0 +1,42 @@
+ALTER AUTHORIZATION ON ENDPOINT::Hadr_endpoint TO sa
+GO
+
+DECLARE @svcaccount nvarchar(25), @sqlcommand nvarchar(500)
+SELECT @svcaccount = service_account FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server (%)'
+SELECT @svcaccount = '[' + @svcaccount + ']'
+SELECT @sqlcommand = 'ALTER SERVER ROLE [sysadmin] ADD MEMBER ' + @svcaccount + ';'
+EXEC sp_executesql @sqlcommand
+SELECT @sqlcommand = 'GRANT CONNECT ON ENDPOINT::Hadr_endpoint TO ' + @svcaccount + ';'
+EXEC sp_executesql @sqlcommand
+GO
+
+DECLARE @sqlcommand NVARCHAR(500)
+DECLARE crsr CURSOR FOR
+----------------------------------
+SELECT 'ALTER AUTHORIZATION ON AVAILABILITY GROUP::[' + name + '] TO sa;' FROM sys.availability_groups 
+----------------------------------
+OPEN crsr
+FETCH NEXT FROM crsr INTO @sqlcommand
+WHILE @@FETCH_STATUS = 0
+BEGIN
+----------------------------------
+EXEC sp_executesql @sqlcommand
+----------------------------------
+FETCH NEXT FROM crsr INTO @sqlcommand
+END
+CLOSE crsr
+DEALLOCATE crsr
+
+
+DROP LOGIN [login_name]
+GO
+
+
+-- If owns many databases, change owner to sa user
+EXEC sp_msforeachdb '
+IF ''?'' NOT IN (''master'',''model'',''msdb'',''tempdb'')
+BEGIN
+USE ''?''
+EXEC dbo.sp_changedbowner @loginame = N''sa''
+END
+'
