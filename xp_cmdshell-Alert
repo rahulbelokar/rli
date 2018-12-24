@@ -1,0 +1,145 @@
+
+
+-- ======================================================================================================
+-- Author:		Emrah Sağlam
+-- Create date: 01.02.2017
+-- Description:	Sends warning mail when xp_cmdshell configuration is enabled.
+-- Compatibility: SQL Server 2008 or above
+-- ======================================================================================================
+
+/* Creates temporary table to insert error logs (for last 15 minutes) which includes xp_cmdshell keyword */
+create table #errorlog_temp (logdate datetime,processInfo varchar(50), Text varchar(max))
+insert into #errorlog_temp exec master.dbo.xp_readerrorlog 0, 1, NULL, NULL, NULL, NULL, 'asc'   
+delete from #errorlog_temp where logdate < DATEADD(minute,-15, GETDATE())
+
+IF(select count(text) from #errorlog_temp where text like 'Configuration option ''xp_cmdshell'' changed from 0 to 1%') >= 1
+BEGIN
+
+/* Creates global temporary table to insert changes on xp_cmdshell configuration */
+create table ##config_changes (l1 int,difference int, config_option varchar(100), login_name varchar(100),old_value int,new_value int,start_time datetime, date datetime)
+insert into ##config_changes
+
+exec sp_executesql @stmt=N'begin try
+declare @enable int;
+select @enable = convert(int,value_in_use) from sys.configurations where name = ''default trace enabled''
+if @enable = 1 --default trace is enabled
+begin
+        declare @d1 datetime;
+        declare @diff int;  
+        declare @curr_tracefilename varchar(500); 
+        declare @base_tracefilename varchar(500); 
+        declare @indx int ;
+        declare @temp_trace table (
+                textdata nvarchar(MAX) collate database_default 
+        ,       login_name sysname collate database_default
+        ,       start_time datetime
+        ,       event_class int
+        );       
+        select @curr_tracefilename = path from sys.traces where is_default = 1 ;        
+        set @curr_tracefilename = reverse(@curr_tracefilename)
+        select @indx  = PATINDEX(''%\%'', @curr_tracefilename) 
+        set @curr_tracefilename = reverse(@curr_tracefilename)
+        set @base_tracefilename = LEFT( @curr_tracefilename,len(@curr_tracefilename) - @indx) + ''\log.trc'';       
+        insert into @temp_trace
+        select TextData
+        ,       LoginName
+        ,       StartTime
+        ,       EventClass 
+        from ::fn_trace_gettable( @base_tracefilename, default ) 
+        where ((EventClass = 22 and Error = 15457) or (EventClass = 116 and TextData like ''%TRACEO%(%''))
+        select @d1 = min(start_time) from @temp_trace
+        set @diff= datediff(hh,@d1,getdate())
+        set @diff=@diff/24; 
+
+        select (row_number() over (order by start_time desc))%2 as l1
+        ,       @diff as difference
+        ,       case event_class 
+                        when 116 then ''Trace Flag '' + substring(textdata,patindex(''%(%'',textdata),len(textdata) - patindex(''%(%'',textdata) + 1) 
+                        when 22 then substring(textdata,58,patindex(''%changed from%'',textdata)-60) 
+                end as config_option
+        ,       login_name
+        ,       case event_class 
+                        when 116 then ''--''
+                        when 22 then substring(substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))
+                                                                ,patindex(''%changed from%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata)))+13
+                                                                ,patindex(''%to%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))) - patindex(''%from%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))) - 6) 
+                end as old_value
+        ,       case event_class 
+                        when 116 then substring(textdata,patindex(''%TRACE%'',textdata)+5,patindex(''%(%'',textdata) - patindex(''%TRACE%'',textdata)-5)
+                        when 22 then substring(substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))
+                                                                ,patindex(''%to%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata)))+3
+                                                                , patindex(''%. Run%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))) - patindex(''%to%'',substring(textdata,patindex(''%changed from%'',textdata),len(textdata) - patindex(''%changed from%'',textdata))) - 3) 
+                end as new_value
+        ,       start_time
+        ,       @d1 as date
+        from @temp_trace 
+        order by start_time desc
+
+end else 
+begin 
+        select top 0  1  as l1, 1 as difference,1 as date , 1 as config_option,1 as start_time , 1 as login_name, 1 as old_value, 1 as new_value
+end
+end try 
+begin catch
+select -100  as l1
+,       ERROR_NUMBER() as difference
+,       ERROR_SEVERITY() as date 
+,       ERROR_STATE() as config_option
+,       1 as start_time 
+,       ERROR_MESSAGE() as login_name
+,       1 as old_value, 1 as new_value
+end catch',@params=N''
+
+
+/* Send ##config_changes table results as a mail */
+DECLARE @mailfrom varchar(max)
+DECLARE @subject varchar(100)
+DECLARE @tableHTML NVARCHAR(MAX)
+DECLARE @Table NVARCHAR(MAX)
+DECLARE @jobName varchar(100)
+SELECT @jobName = name from msdb..sysjobs where job_id = $(ESCAPE_NONE(JOBID))
+SET @Table = N''
+SELECT @mailfrom = @@SERVERNAME + ' <' + cast(SERVERPROPERTY('ComputerNamePhysicalNETBIOS') as varchar(50)) + '@domain.com>'
+SELECT @Table = @Table + '<tr style="font-size:13px;background-color:#FFFFFF">' + 
+	'<td>' + CAST(config_option as varchar) + '</td>' +
+	'<td>' + CAST(old_value as varchar) + '</td>' +
+	'<td>' + CAST(new_value as varchar) + '</td>' +
+	'<td>' + CAST(login_name as varchar) + '</td>' +
+	'<td>' + CONVERT(varchar,start_time,120) + '</td>' + '</tr>'  
+	from ##config_changes 
+	where config_option = 'xp_cmdshell' and GETDATE()-start_time<=1
+	
+SET @tableHTML = 
+@@SERVERNAME + ' instance için son 24 saat içerisinde xp_cmdshell konfigurasyonu üzerinde yapılan değişiklikler aşağıdaki gibidir:<br><br>' + 
+N'<table border="1" align="Left" cellpadding="2" cellspacing="0" style="color:black;font-family:arial,helvetica,sans-serif;text-align:center;" >' +
+N'<tr style ="font-size:13px;font-weight: normal;background: #FFFFFF">
+<th>Config Option</th>
+<th>Old Value</th>
+<th>New Value</th>
+<th>Login Name</th> 
+<th>Change Time</th> </tr>' + @Table + '</table>'
+
+Select @subject = 'Instance xp_cmdshell Configuration Enabled! [JobID: ' + @jobName + ']'
+    EXEC msdb.dbo.sp_send_dbmail
+    @profile_name= 'sqlmail',
+    @recipients= '<mail1@domain.com>',
+    @from_address = @mailfrom,
+    @reply_to = '<mail2@domain.com>',
+    @subject = @subject,
+    @body = @tableHTML,
+    @body_format = 'HTML',
+    @importance = 'HIGH'
+
+drop table ##config_changes
+END
+
+drop table #errorlog_temp
+
+/* Disable xp_cmdshell configuration */
+IF(SELECT value_in_use from sys.configurations where name = 'xp_cmdshell') = 1
+BEGIN
+exec sp_configure xp_cmdshell,0
+reconfigure with override
+END
+
+GO
