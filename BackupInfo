@@ -1,0 +1,84 @@
+CREATE TABLE #BackupTemp ([Instance] nvarchar(50), [Database] nvarchar(50), [RecoveryModel] varchar(25), [Type] varchar(5), [UncompressedSize(MB)] BIGINT, [CompressedSize(MB)] BIGINT, [CompressionRatio] FLOAT, [BackupElapsedTime(sec)] BIGINT, [BackupStartDate] DATETIME, [BackupFinishDate] DATETIME, [Description] NVARCHAR(200), first_lsn NVARCHAR(200), last_lsn NVARCHAR(200), checkpoint_lsn NVARCHAR(200), database_backup_lsn NVARCHAR(200) )
+
+INSERT INTO #BackupTemp
+EXEC sp_MSforeachdb '
+IF ''?'' NOT IN (''tempdb'')
+BEGIN
+USE [?]
+SELECT bs.server_name AS [Instance], bs.database_name AS [Database], bs.recovery_model AS [RecoveryModel], bs.type AS [Type],
+CONVERT (BIGINT, bs.backup_size / 1048576 ) AS [UncompressedSize(MB)],
+CONVERT (BIGINT, bs.compressed_backup_size / 1048576 ) AS [CompressedSize(MB)],
+CONVERT (NUMERIC (20,2), (CONVERT (FLOAT, bs.backup_size) / CONVERT (FLOAT, bs.compressed_backup_size))) AS [CompressionRatio], 
+DATEDIFF (SECOND, bs.backup_start_date, bs.backup_finish_date) AS [BackupElapsedTime(sec)],
+bs.backup_start_date AS [BackupStartDate],
+bs.backup_finish_date AS [BackupFinishDate],
+bs.description AS [Description],
+bs.first_lsn, bs.last_lsn, bs.checkpoint_lsn, bs.database_backup_lsn
+FROM msdb.dbo.backupset AS bs WITH (NOLOCK)
+WHERE  bs.backup_size > 0
+AND bs.type = ''D'' -- Change to L for Log Backups, I for Incremental (Diff) Backups
+AND database_name = DB_NAME(DB_ID())
+--ORDER BY bs.backup_finish_date DESC OPTION (RECOMPILE);
+END'
+SELECT * FROM #BackupTemp 
+WHERE DATEDIFF(DAY,BackupFinishDate,GETDATE()) < 7 --AND [Database] like 'DBNAME%' 
+ORDER BY BackupFinishDate DESC
+
+DROP TABLE #BackupTemp
+
+------------
+
+SET NOCOUNT ON
+SELECT SUBSTRING(CONVERT(CHAR(100), 
+SERVERPROPERTY('Servername')), 1, 30) AS 'Instance',
+SUBSTRING(s.name,1,25) AS 'Database',
+CONVERT(SYSNAME, DATABASEPROPERTYEX(N''+ s.name + '', 'Recovery')) AS RecoveryModel,
+CASE b.type  
+	WHEN 'D' THEN 'Full'
+	WHEN 'L' THEN 'Transaction Log'
+END AS 'Type', 
+CAST(b.backup_start_date AS char(25)) AS 'LastBackupDate',
+CAST(DATEDIFF(n,backup_start_date,backup_finish_date) AS varchar(5)) + 'min.' AS [Duration],
+CASE 
+	WHEN b.backup_start_date > DATEADD(dd, -1, GETDATE()) THEN 'Backup Completed'
+	WHEN b.backup_start_date < DATEADD(dd, -1, GETDATE()) THEN 'Not Taken'
+	ELSE 'Not Taken'
+END AS 'Status',
+STR(CAST(b.backup_size AS decimal(20,2)) / 1048576 ,10,2) + 'MB' AS [BackupSize],
+m.physical_device_name AS 'Location'
+FROM master..sysdatabases s
+LEFT OUTER JOIN msdb..backupset b ON s.name = b.database_name
+AND b.backup_start_date = ( 
+	SELECT MAX(backup_start_date)
+	FROM msdb..backupset
+	WHERE database_name = b.database_name
+	AND type = 'D' )
+LEFT OUTER JOIN msdb..backupmediafamily m ON m.media_set_id = b.media_set_id
+AND m.physical_device_name = ( 
+	SELECT MAX(physical_device_name) 
+	FROM  msdb..backupmediafamily
+	WHERE media_set_id=b.media_set_id )
+WHERE s.name <> 'tempdb'
+ORDER BY b.backup_start_date desc
+
+-------------
+
+SELECT r.session_id AS [SessionId]
+,r.command AS [Command]
+,CONVERT(NUMERIC(6, 2), r.percent_complete) AS [%Complete]
+,GETDATE() AS [CurrentTime]
+,CONVERT(NUMERIC(32, 2), r.total_elapsed_time / 1000.0 / 60.0) AS [ElapsedMin]
+,CONVERT(VARCHAR(20), DATEADD(ms, r.estimated_completion_time, GetDate()), 20) AS [EstimatedCompletionTime]
+,CONVERT(NUMERIC(32, 2), r.estimated_completion_time / 1000.0 / 60.0 / 60.0) AS [EstimatedHours]
+,CONVERT(NUMERIC(32, 2), r.estimated_completion_time / 1000.0 / 60.0) AS [EstimatedMin]
+,CONVERT(VARCHAR(1000), (
+	SELECT SUBSTRING(TEXT, r.statement_start_offset / 2, 
+	CASE
+		WHEN r.statement_end_offset = -1 THEN 1000
+		ELSE (r.statement_end_offset - r.statement_start_offset) / 2
+	END ) AS 'Statement text'
+	FROM sys.dm_exec_sql_text(sql_handle)
+	))
+FROM sys.dm_exec_requests r
+WHERE command LIKE 'RESTORE%'
+OR command LIKE 'BACKUP%'
