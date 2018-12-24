@@ -1,0 +1,34 @@
+-- Disable all the constraint in database
+EXEC sp_msforeachtable "ALTER TABLE ? NOCHECK CONSTRAINT all"
+
+-- Enable all the constraint in database
+EXEC sp_msforeachtable "ALTER TABLE ? WITH CHECK CHECK CONSTRAINT all"
+
+----------------------------
+
+SELECT ('ALTER TABLE [' + ccu.TABLE_SCHEMA + '].[' + ccu.TABLE_NAME + '] DROP CONSTRAINT [' + 
+
+ccu.CONSTRAINT_NAME + '];') as DropConstraintScript
+,('ALTER TABLE [' + ccu.TABLE_SCHEMA + '].[' + ccu.TABLE_NAME + '] WITH CHECK ADD CONSTRAINT [' + 
+
+ccu.CONSTRAINT_NAME + '] FOREIGN KEY([' + ccu.COLUMN_NAME + ']) REFERENCES [' + kcu.TABLE_SCHEMA + '].[' + 
+
+kcu.TABLE_NAME + ']([' + kcu.COLUMN_NAME + '])' + ';') as AddConstraintScript
+,('ALTER TABLE [' + ccu.TABLE_SCHEMA + '].[' + ccu.TABLE_NAME + '] CHECK CONSTRAINT [' + ccu.CONSTRAINT_NAME + 
+
+'];') as CheckConstraintScript
+FROM INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ccu
+    INNER JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+        ON ccu.CONSTRAINT_NAME = rc.CONSTRAINT_NAME 
+    INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu 
+        ON kcu.CONSTRAINT_NAME = rc.UNIQUE_CONSTRAINT_NAME  
+        WHERE kcu.table_name IN (SELECT name FROM sys.tables) OR ccu.table_name IN (SELECT name FROM 
+
+sys.tables)
+--        WHERE kcu.table_name = 'Table_Name' OR ccu.table_name = 'Table_Name'
+
+----------------------------
+
+select 'truncate table ' + name from sys.tables
+select 'drop table ' + name from sys.tables
+select 'drop table ' + name from sys.view
