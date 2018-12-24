@@ -1,3 +1,12 @@
+EXEC sp_MSforeachdb '
+IF ''?'' NOT IN (''master'', ''model'', ''msdb'', ''tempdb'', ''distribution'')
+BEGIN
+BACKUP DATABASE [?] TO  DISK = N''Y:\SQLBACKUP\?.bak'' WITH NOFORMAT, NOINIT,  NAME = N''?-Full Database Backup'', SKIP, NOREWIND, NOUNLOAD, COMPRESSION, STATS = 10
+END
+'
+
+------------
+
 CREATE TABLE #BackupTemp ([Instance] nvarchar(50), [Database] nvarchar(50), [RecoveryModel] varchar(25), [Type] varchar(5), [UncompressedSize(MB)] BIGINT, [CompressedSize(MB)] BIGINT, [CompressionRatio] FLOAT, [BackupElapsedTime(sec)] BIGINT, [BackupStartDate] DATETIME, [BackupFinishDate] DATETIME, [Description] NVARCHAR(200), first_lsn NVARCHAR(200), last_lsn NVARCHAR(200), checkpoint_lsn NVARCHAR(200), database_backup_lsn NVARCHAR(200) )
 
 INSERT INTO #BackupTemp
