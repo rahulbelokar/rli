@@ -1,3 +1,30 @@
+USE [msdb]
+GO
+/****** Add New Operator as SQL DBA ******/
+EXEC msdb.dbo.sp_add_operator @name=N'SQLDBA', 
+		@enabled=1, 
+		@weekday_pager_start_time=90000, 
+		@weekday_pager_end_time=180000, 
+		@saturday_pager_start_time=90000, 
+		@saturday_pager_end_time=180000, 
+		@sunday_pager_start_time=90000, 
+		@sunday_pager_end_time=180000, 
+		@pager_days=0, 
+		@email_address=N'sqladmin@domain.com', 
+		@category_name=N'[Uncategorized]'
+GO
+
+/****** Enable Alert System on SQL Server (SQL Server Agent Service must be Restarted) ******/
+EXEC master.dbo.xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\MSSQLServer\SQLServerAgent', N'DatabaseMailProfile', N'REG_SZ', N'sqlservermail'
+GO
+EXEC msdb.dbo.sp_set_sqlagent_properties @email_save_in_sent_folder=1, 
+		@alert_replace_runtime_tokens=1, 
+		@databasemail_profile=N'sqlservermail', 
+		@use_databasemail=1
+GO
+
+-----------------------------------------------
+
 IF (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1
 BEGIN
 
