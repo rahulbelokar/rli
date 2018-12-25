@@ -1,0 +1,120 @@
+IF (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1
+BEGIN
+
+USE [msdb]
+
+/****** Object:  Alert [AlwaysOn - Data Movement Resumed]    Script Date: 20.03.2018 10:08:49 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Data Movement Resumed', 
+		@message_id=35265, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@notification_message=N'AlwaysOn - Data Movement Resumed', 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Data Movement Resumed', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Data Movement Suspended]    Script Date: 20.03.2018 10:08:54 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Data Movement Suspended', 
+		@message_id=35264, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@notification_message=N'AlwaysOn - Data Movement Suspended', 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Data Movement Suspended', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35254]    Script Date: 20.03.2018 10:09:07 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35254', 
+		@message_id=35254, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35254', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35262]    Script Date: 20.03.2018 10:09:19 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35262', 
+		@message_id=35262, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35262', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35273]    Script Date: 20.03.2018 10:09:33 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35273', 
+		@message_id=35273, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35273', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35274]    Script Date: 20.03.2018 10:09:54 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35274', 
+		@message_id=35274, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35274', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35275]    Script Date: 20.03.2018 10:10:07 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35275', 
+		@message_id=35275, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35275', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Error - 35276]    Script Date: 20.03.2018 10:10:28 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Error - 35276', 
+		@message_id=35276, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Error - 35276', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [AlwaysOn - Role Change]    Script Date: 20.03.2018 10:10:39 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'AlwaysOn - Role Change', 
+		@message_id=1480, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=0, 
+		@include_event_description_in=1, 
+		@notification_message=N'AlwaysOn - Role Changed', 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'AlwaysOn - Role Change', @operator_name=N'SQLDBA', @notification_method = 1
+
+/****** Object:  Alert [Login failed]    Script Date: 02.10.2018 11:35:43 ******/
+EXEC msdb.dbo.sp_add_alert @name=N'Login failed', 
+		@message_id=18456, 
+		@severity=0, 
+		@enabled=1, 
+		@delay_between_responses=300, 
+		@include_event_description_in=1, 
+		@event_description_keyword=N'Login failed for user', 
+		@category_name=N'[Uncategorized]', 
+		@job_id=N'00000000-0000-0000-0000-000000000000'
+EXEC msdb.dbo.sp_add_notification @alert_name=N'Login failed', @operator_name=N'SQLDBA', @notification_method = 1
+
+END
