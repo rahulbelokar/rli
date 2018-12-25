@@ -66,9 +66,8 @@ ORDER BY 8 desc --dbinfo.InitialSizeMB DESC
 DROP TABLE #FreeSpace_Temp, #Filegroup_Temp, #AutoGrow_Temp, #RecoveryModel_Temp
 
 
-
 ------------------------------------------------------------------------
-Total Instance Size (Data+LOG):
+--Total Instance Size (Data+LOG):
 
 CREATE TABLE #FreeSpace_Temp ( 
 [physical_name] NVARCHAR(300),
@@ -98,3 +97,67 @@ on dbinfo.Physical_Name = frees.physical_name
 GROUP BY dbinfo.Type
 
 DROP TABLE #FreeSpace_Temp
+
+
+------------------------------------------------------------------------
+--Total DB Size (Data+LOG):
+
+CREATE TABLE #FreeSpace_Temp ( 
+[physical_name] NVARCHAR(300),
+[FreeSpaceMB] BIGINT
+)
+INSERT INTO #FreeSpace_Temp
+EXEC sp_MSforeachdb '
+USE [?]
+SELECT physical_name, 
+size/128.0 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128.0 AS FreeSpaceMB 
+from sys.database_files'
+
+CREATE TABLE #Filegroup_Temp ( 
+[name] NVARCHAR(128),
+[data_space_id] INT,
+[file_info] NVARCHAR(512)
+)
+INSERT INTO #Filegroup_Temp
+EXEC sp_MSforeachdb '
+USE [?]
+SELECT fg.name, fg.data_space_id, sf.filename
+FROM sys.filegroups fg
+INNER JOIN sys.sysfiles sf
+ON fg.data_space_id = sf.groupid'
+
+SELECT dbinfo.DatabaseName, dbinfo.Type, sum(dbinfo.InitialSizeMB)/1024 as InitialSizeGB, sum(frees.FreeSpaceMB)/1024 as FreeSpaceGB, (sum(dbinfo.InitialSizeMB)-sum(frees.FreeSpaceMB))/1024 as TotalSizeGB FROM
+(
+SELECT DB_NAME(database_id) AS DatabaseName,
+mf.Name AS LogicalName,
+mf.type_desc AS Type,
+fg.name AS Filegroup,
+mf.Physical_Name, 
+CAST(mf.size AS bigint)*8/1024 AS InitialSizeMB,
+mf.growth*8/1024 AS AutoGrowthInMB,
+mf.max_size/128 AS MaxsizeMB,
+mf.is_percent_growth AS AutoGrowthInPercent
+FROM sys.master_files mf
+inner join #Filegroup_Temp fg
+ON mf.physical_name = fg.file_info
+UNION
+SELECT DB_NAME(database_id) AS DatabaseName,
+Name AS LogicalName,
+type_desc AS Type,
+'Not Applicable' AS Filegroup,
+Physical_Name, 
+CAST(size AS bigint)*8/1024 AS InitialSizeMB,
+growth*8/1024 AS AutoGrowthInMB,
+max_size/128 AS MaxsizeMB,
+is_percent_growth AS AutoGrowthInPercent
+FROM sys.master_files
+WHERE physical_name like '%.ldf'
+) dbinfo
+left join #FreeSpace_Temp frees
+on dbinfo.Physical_Name = frees.physical_name
+WHERE dbinfo.DatabaseName NOT IN ('master','model','msdb','tempdb') AND dbinfo.Type = 'ROWS' --AND dbinfo.Physical_Name like 'D:\%' --and dbinfo.AutoGrowthInMB <> 0 --and dbinfo.Type='LOG'
+GROUP BY dbinfo.DatabaseName, dbinfo.Type
+ORDER BY 1 --dbinfo.InitialSizeMB DESC
+
+DROP TABLE #FreeSpace_Temp
+DROP TABLE #Filegroup_Temp
