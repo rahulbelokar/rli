@@ -1,0 +1,166 @@
+USE [msdb]
+GO
+
+/****** Object:  Job [DBA-ShrinkDB&UpdateStatistics]    Script Date: 02.12.2018 15:11:13 ******/
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object:  JobCategory [[Uncategorized (Local)]]    Script Date: 02.12.2018 15:11:13 ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'[Uncategorized (Local)]' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'[Uncategorized (Local)]'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode =  msdb.dbo.sp_add_job @job_name=N'DBA-ShrinkDB&UpdateStatistics', 
+		@enabled=0, 
+		@notify_level_eventlog=2, 
+		@notify_level_email=0, 
+		@notify_level_netsend=0, 
+		@notify_level_page=0, 
+		@delete_level=0, 
+		@description=N'Boş alan oranı %20''den büyük olan ve 20GB''dan fazla boş alanı bulunan DB file''ların shrink işlemidir.
+Shrink işleminden sonra isteğe bağlı olarak tablolarda istatistikler update edilir (Ola Hallengren).', 
+		@category_name=N'[Uncategorized (Local)]', 
+		@owner_login_name=N'akbsqlsa', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [ShrinkDBFiles]    Script Date: 02.12.2018 15:11:13 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'ShrinkDBFiles', 
+		@step_id=1, 
+		@cmdexec_success_code=0, 
+		@on_success_action=3, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'CREATE TABLE #TTable (ShrinkCommand nvarchar(1000))
+INSERT INTO #TTable
+EXEC sp_MSforeachdb ''
+DECLARE @sqlcommand nvarchar (500)
+IF ''''?'''' NOT IN (''''master'''', ''''model'''', ''''msdb'''')
+BEGIN
+USE [?]
+SELECT
+''''USE ['''' + DB_NAME() + '''']; DBCC SHRINKFILE (N'''''''''''' + [name] + '''''''''''', 0);'''' AS [ShrinkCommand]
+FROM sys.database_files
+WHERE (type_desc = ''''LOG'''' OR type_desc = ''''ROWS'''') AND										-- (Log or Rows) Data File
+(size - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS INT))/128/1024 >= 20						-- Free space 20GB dan büyük
+AND ROUND((size - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS FLOAT))/size, 2)*100 >= 20		-- Free space oranı %20 üzerinde olan
+END''
+--SELECT * FROM #TTable
+
+DECLARE @sqlcommand NVARCHAR(500)
+DECLARE crsr CURSOR FOR
+----------------------------------
+SELECT * FROM #TTable
+----------------------------------
+OPEN crsr
+FETCH NEXT FROM crsr INTO @sqlcommand
+WHILE @@FETCH_STATUS = 0
+BEGIN
+----------------------------------
+	EXEC sp_executesql @sqlcommand
+----------------------------------
+FETCH NEXT FROM crsr INTO @sqlcommand
+END
+CLOSE crsr
+DEALLOCATE crsr
+DROP TABLE #TTable
+
+
+/* 
+CREATE TABLE #TTable ([DatabaseName] NVARCHAR(100), [LogicalName] NVARCHAR(100), [Type] VARCHAR(25), SizeGB BIGINT, FreeSpaceGB BIGINT, PercentFree FLOAT, ShrinkCommand nvarchar(1000))
+INSERT INTO #TTable
+EXEC sp_MSforeachdb ''
+DECLARE @sqlcommand nvarchar (500)
+IF ''''?'''' NOT IN (''''master'''', ''''model'''', ''''msdb'''')
+BEGIN
+USE [?]
+SELECT
+DB_NAME() AS [DatabaseName], 
+name AS [LogicalName], 
+type_desc AS [Type],
+size/128/1024 AS SizeGB, 
+(size/128 - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS INT)/128)/1024 AS FreeSpaceGB,
+ROUND((size - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS FLOAT))/size, 2)*100 AS PercentFree,
+''''USE ['''' + DB_NAME() + '''']; DBCC SHRINKFILE (N'''''''''''' + [name] + '''''''''''', 0);'''' AS [ShrinkCommand]
+FROM sys.database_files
+WHERE (type_desc = ''''LOG'''' OR type_desc = ''''ROWS'''') AND										-- (Log or Rows) Data File
+(size - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS INT))/128/1024 >= 20						-- Free space 20GB dan büyük
+AND ROUND((size - CAST(FILEPROPERTY(name, ''''SpaceUsed'''') AS FLOAT))/size, 2)*100 >= 20		-- Free space oranı %20 üzerinde olan
+END''
+SELECT * FROM #TTable
+DROP TABLE #TTable
+*/', 
+		@database_name=N'master', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object:  Step [UpdateStatistics]    Script Date: 02.12.2018 15:11:13 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'UpdateStatistics', 
+		@step_id=2, 
+		@cmdexec_success_code=0, 
+		@on_success_action=1, 
+		@on_success_step_id=0, 
+		@on_fail_action=2, 
+		@on_fail_step_id=0, 
+		@retry_attempts=0, 
+		@retry_interval=0, 
+		@os_run_priority=0, @subsystem=N'TSQL', 
+		@command=N'/*
+EXECUTE [master].[dbo].[IndexOptimize]
+@Databases = ''USER_DATABASES'',
+@FragmentationLow = NULL,
+@FragmentationMedium = NULL,
+@FragmentationHigh = NULL,
+@UpdateStatistics = ''ALL'',
+@OnlyModifiedStatistics = ''Y'',
+@StatisticsSample = 30
+*/', 
+		@database_name=N'master', 
+		@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'OneTime1900', 
+		@enabled=0, 
+		@freq_type=1, 
+		@freq_interval=0, 
+		@freq_subday_type=0, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=0, 
+		@active_start_date=20181207, 
+		@active_end_date=99991231, 
+		@active_start_time=190000, 
+		@active_end_time=235959, 
+		@schedule_uid=N'75b1835a-7a63-4c5f-878e-7d25d0f68079'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'Wed1900', 
+		@enabled=1, 
+		@freq_type=8, 
+		@freq_interval=8, 
+		@freq_subday_type=1, 
+		@freq_subday_interval=0, 
+		@freq_relative_interval=0, 
+		@freq_recurrence_factor=1, 
+		@active_start_date=20181205, 
+		@active_end_date=99991231, 
+		@active_start_time=190000, 
+		@active_end_time=235959, 
+		@schedule_uid=N'93794605-b5fb-493b-8e2c-5e63187a96ec'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+    IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO
+
+
