@@ -1,0 +1,15 @@
+--Change Autogrow values:
+
+USE [master]
+GO
+SELECT ('ALTER DATABASE [' + DB_NAME(database_id) + '] MODIFY FILE ( NAME = N''' + name + ''', MAXSIZE = UNLIMITED, FILEGROWTH = 102400KB )' ) FROM sys.master_files
+where growth <> 0 --and type_desc='LOG' or type_desc='ROWS'
+ORDER BY DB_NAME(database_id)
+
+
+-----------------------------
+
+
+--Add new datafile to new disk (check filegroup, filename and disk):
+
+SELECT 'USE [master]'+ CHAR(13)+CHAR(10)+'GO'+CHAR(13)+CHAR(10)+'ALTER DATABASE ['+DB_NAME(database_id)+'] MODIFY FILE ( NAME = N'''+name+''', FILEGROWTH = 0)'+CHAR(13)+CHAR(10)+'GO'+CHAR(13)+CHAR(10)+'ALTER DATABASE ['+DB_NAME(database_id)+'] ADD FILE ( NAME = N'''+name+'_2'', FILENAME = N''K:\SQLDATA\SQLPKEP0\'+name+'_2.ndf'' , SIZE = 102400KB , FILEGROWTH = 102400KB ) TO FILEGROUP [PRIMARY]' from sys.master_files  where physical_name like  '%K:%' and growth != 0
