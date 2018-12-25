@@ -1,0 +1,100 @@
+CREATE TABLE #FreeSpace_Temp ([physical_name] NVARCHAR(300), [FreeSpaceMB] BIGINT)
+INSERT INTO #FreeSpace_Temp
+	EXEC sp_MSforeachdb '
+	USE [?]
+	SELECT physical_name, 
+	size/128 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128 AS FreeSpaceMB 
+	FROM sys.database_files'
+
+CREATE TABLE #Filegroup_Temp ([name] NVARCHAR(128), [data_space_id] INT, [file_info] NVARCHAR(512))
+INSERT INTO #Filegroup_Temp
+	EXEC sp_MSforeachdb '
+	USE [?]
+	SELECT fg.name, fg.data_space_id, sf.filename
+	FROM sys.filegroups fg
+	INNER JOIN sys.sysfiles sf
+	ON fg.data_space_id = sf.groupid'
+
+CREATE TABLE #AutoGrow_Temp ([physical_name] NVARCHAR(300), [growth] BIGINT)
+INSERT INTO #AutoGrow_Temp
+	SELECT physical_name, growth FROM sys.master_files WHERE is_percent_growth = 1
+	UNION ALL
+	SELECT physical_name, 0 FROM sys.master_files WHERE is_percent_growth = 0
+
+CREATE TABLE #RecoveryModel_Temp ([name] NVARCHAR(100), [RecoveryModel] VARCHAR(25))
+INSERT INTO #RecoveryModel_Temp
+	SELECT name,recovery_model_desc FROM sys.databases
+
+SELECT dbinfo.DatabaseName, dbinfo.LogicalName, rmod.RecoveryModel, dbinfo.Type, dbinfo.Filegroup, dbinfo.physical_name as 'DatabaseFilePath', dbinfo.InitialSizeMB, frees.FreeSpaceMB, (dbinfo.InitialSizeMB-frees.FreeSpaceMB) AS TotalSizeMB, dbinfo.AutoGrowthInMB, dbinfo.AutoGrowthInPercent, dbinfo.MaxsizeMB, 'USE [' + dbinfo.DatabaseName + ']; CHECKPOINT; DBCC SHRINKFILE (N''' + dbinfo.LogicalName + ''' , ' + CAST((dbinfo.InitialSizeMB-frees.FreeSpaceMB) AS VARCHAR(25)) + ')' AS 'ShrinkCommand' FROM
+	(
+		SELECT DB_NAME(database_id) AS DatabaseName,
+		mf.Name AS LogicalName,
+		mf.type_desc AS Type,
+		fg.name AS Filegroup,
+		mf.physical_name, 
+		CAST(mf.size AS bigint)*8/1024 AS InitialSizeMB,
+		mf.growth*8/1024 AS AutoGrowthInMB,
+		agrow.growth AS AutoGrowthInPercent,
+		mf.max_size/128 AS MaxsizeMB
+		FROM sys.master_files mf
+		inner join #Filegroup_Temp fg
+		ON mf.physical_name = fg.file_info
+		LEFT JOIN #AutoGrow_Temp agrow
+		ON mf.physical_name = agrow.physical_name
+	UNION ALL
+		SELECT DB_NAME(database_id) AS DatabaseName,
+		Name AS LogicalName,
+		type_desc AS Type,
+		'Not Applicable' AS Filegroup,
+		mf.physical_name, 
+		CAST(size AS bigint)*8/1024 AS InitialSizeMB,
+		mf.growth*8/1024 AS AutoGrowthInMB,
+		agrow.growth AS AutoGrowthInPercent,
+		max_size/128 AS MaxsizeMB
+		FROM sys.master_files mf
+		LEFT JOIN #AutoGrow_Temp agrow
+		ON mf.physical_name = agrow.physical_name
+		WHERE mf.physical_name like '%.ldf'
+	) dbinfo
+LEFT JOIN #FreeSpace_Temp frees
+ON dbinfo.physical_name = frees.physical_name
+LEFT JOIN #RecoveryModel_Temp rmod
+ON dbinfo.DatabaseName = rmod.name
+WHERE dbinfo.DatabaseName NOT IN ('master','model','msdb','tempdb') --AND dbinfo.Type='LOG' --AND dbinfo.physical_name like 'D:\%' --AND dbinfo.AutoGrowthInMB <> 0
+ORDER BY 8 desc --dbinfo.InitialSizeMB DESC
+
+DROP TABLE #FreeSpace_Temp, #Filegroup_Temp, #AutoGrow_Temp, #RecoveryModel_Temp
+
+
+
+------------------------------------------------------------------------
+Total Instance Size (Data+LOG):
+
+CREATE TABLE #FreeSpace_Temp ( 
+[physical_name] NVARCHAR(300),
+[FreeSpaceMB] BIGINT
+)
+INSERT INTO #FreeSpace_Temp
+EXEC sp_MSforeachdb '
+USE [?]
+SELECT physical_name, 
+size/128.0 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128.0 AS FreeSpaceMB 
+from sys.database_files'
+
+SELECT dbinfo.Type, sum(dbinfo.InitialSizeMB)/1024 as InitialSizeGB, sum(frees.FreeSpaceMB)/1024 as FreeSpaceGB, (sum(dbinfo.InitialSizeMB) - sum(frees.FreeSpaceMB))/1024 as TotalSizeGB FROM
+(
+SELECT DB_NAME(database_id) AS DatabaseName,
+mf.Name AS LogicalName,
+mf.type_desc AS Type,
+mf.Physical_Name, 
+CAST(mf.size AS bigint)*8/1024 AS InitialSizeMB,
+mf.growth*8/1024 AS AutoGrowthInMB,
+mf.max_size/128 AS MaxsizeMB,
+mf.is_percent_growth AS AutoGrowthInPercent
+FROM sys.master_files mf
+) dbinfo
+left join #FreeSpace_Temp frees
+on dbinfo.Physical_Name = frees.physical_name
+GROUP BY dbinfo.Type
+
+DROP TABLE #FreeSpace_Temp
