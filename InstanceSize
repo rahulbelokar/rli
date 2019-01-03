@@ -1,0 +1,30 @@
+CREATE TABLE #FreeSpace_Temp ( 
+[name] NVARCHAR(128),
+[type] VARCHAR(10),
+[FreeSpaceMB] BIGINT
+)
+INSERT INTO #FreeSpace_Temp
+EXEC sp_MSforeachdb '
+USE [?]
+SELECT name,
+type_desc, 
+size/128.0 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128.0 AS FreeSpaceMB 
+from sys.database_files'
+
+SELECT df.TotalDataFileSizeGB, df.TotalDataFreeSpaceGB, lf.TotalLogFileSizeGB, lf.TotalLogFreeSpaceGB, df.TotalDataFileSizeGB-df.TotalDataFreeSpaceGB+lf.TotalLogFileSizeGB-lf.TotalLogFreeSpaceGB AS TotalInstanceSizeGB from
+(
+SELECT sum(cast(mf.size as bigint))*8/1024/1024 as TotalDataFileSizeGB, sum(fs.FreeSpaceMB)/1024 AS TotalDataFreeSpaceGB 
+from sys.master_files mf
+left join #FreeSpace_Temp fs
+on mf.Name = fs.name
+where mf.type = 0 and fs.type = 'ROWS'
+) df,
+(
+SELECT sum(cast(mf.size as bigint))*8/1024/1024 as TotalLogFileSizeGB, sum(fs.FreeSpaceMB)/1024 AS TotalLogFreeSpaceGB 
+from sys.master_files mf
+left join #FreeSpace_Temp fs
+on mf.Name = fs.name
+where mf.type = 1 and fs.type = 'LOG'
+) lf
+
+DROP TABLE #FreeSpace_Temp
