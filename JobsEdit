@@ -1,0 +1,46 @@
+/***** Find Job Owners *****/
+SELECT J.name AS Job_Name, L.name AS Job_Owner
+FROM msdb.dbo.sysjobs_view J
+LEFT JOIN master.dbo.syslogins L
+ON J.owner_sid = L.sid
+where L.name not in ('akbsqlsa', 'sa', 'SA')
+
+
+/***** Change Job Owner to new_name for All Jobs which Owner includes 'SA','sa' 
+
+*****/
+DECLARE @jname VARCHAR(1000)
+DECLARE jCursor CURSOR FOR
+
+SELECT J.name AS Job_Name
+FROM msdb.dbo.sysjobs_view J
+LEFT JOIN master.dbo.syslogins L
+ON J.owner_sid = L.sid
+where L.name in ('SA','sa','new_name')
+
+OPEN jCursor
+FETCH NEXT FROM jCursor INTO @jname
+WHILE (@@FETCH_STATUS <> -1)
+BEGIN
+exec msdb..sp_update_job
+        @job_name = @jname,
+        @owner_login_name = [new_name]
+FETCH NEXT FROM jCursor INTO @jname
+END 
+CLOSE jCursor
+DEALLOCATE jCursor
+
+
+/**** Jobs with comma delimited list ****/
+DECLARE @listStr VARCHAR(MAX)
+SELECT @listStr = COALESCE(@listStr+',' ,'') + '''' + name + ''''
+FROM msdb.dbo.sysjobs_view
+--where name like 'JOBNAMEPREFIX_%'
+SELECT @listStr
+
+
+
+/**** Disable multiple jobs ****/
+SELECT 'exec msdb..sp_update_job @job_name = '''+NAME+''', @enabled = 0' FROM msdb..sysjobs 
+
+WHERE NAME like 'JOBNAMEPREFIX_%'
