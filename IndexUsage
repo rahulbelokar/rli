@@ -1,0 +1,22 @@
+SELECT DB_NAME(st.database_id) AS [DatabaseName],
+		SCHEMA_NAME(obj.schema_id) AS [SchemaName],
+		obj.[name] AS [TableName],
+		ix.[name] AS [IndexName],
+		ix.[type_desc] AS [IndexType],
+		user_seeks,
+		user_scans,
+		user_lookups,
+		user_updates,
+		last_user_seek,
+		last_user_scan,
+		last_user_lookup,
+		last_user_update,
+		'DROP INDEX [' + ix.[name] + '] ON [' + SCHEMA_NAME(OBJ.schema_id) + '].[' + obj.[name] + ']' AS [DropIndexCommand]
+FROM sys.dm_db_index_usage_stats AS st
+	INNER JOIN sys.indexes AS ix
+	ON ix.[object_id] = st.[object_id] AND ix.index_id = st.[index_id] 
+	LEFT JOIN sys.objects obj
+	ON st.[object_id] = obj.object_id
+WHERE OBJECTPROPERTY(st.[object_id],'IsUserTable') = 1
+	AND ix.[type_desc] <> 'HEAP'
+--	AND ix.name = 'Index_Name'
