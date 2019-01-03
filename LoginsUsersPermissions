@@ -1,0 +1,52 @@
+/***** Server Level Logins and Roles *****/
+SELECT sp.name AS LoginName,sp.type_desc AS LoginType, sp.default_database_name AS DefaultDBName,slog.sysadmin AS SysAdmin,slog.securityadmin AS SecurityAdmin,slog.serveradmin AS ServerAdmin, slog.setupadmin AS SetupAdmin, slog.processadmin AS ProcessAdmin, slog.diskadmin AS DiskAdmin, slog.dbcreator AS DBCreator,slog.bulkadmin AS BulkAdmin
+FROM sys.server_principals sp  JOIN master..syslogins slog
+ON sp.sid=slog.sid 
+WHERE sp.type  <> 'R' AND sp.name NOT LIKE '##%' 
+
+
+/***** Database Users and Roles *****/
+-- Version Check for 10.0 or below versions (for sys.dm_server_services view for exclude service accounts)
+CREATE TABLE #SvcAccTable (AccountName nvarchar(100))
+IF (SELECT CAST(LEFT(CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR),4) AS FLOAT)) <> 10.0 
+INSERT INTO #SvcAccTable SELECT service_account FROM sys.dm_server_services
+ELSE
+INSERT INTO #SvcAccTable SELECT ''
+
+DECLARE @SQLStatement VARCHAR(4000) 
+DECLARE @DBusers TABLE (DBName SYSNAME, UserName SYSNAME, AssociatedDBRole NVARCHAR(256)) 
+SET @SQLStatement='
+SELECT ''?'' AS DBName,dp.name AS UserName,USER_NAME(drm.role_principal_id) AS AssociatedDBRole 
+FROM ?.sys.database_principals dp
+LEFT OUTER JOIN ?.sys.database_role_members drm
+ON dp.principal_id=drm.member_principal_id 
+WHERE dp.sid NOT IN (0x01) AND dp.sid IS NOT NULL AND dp.type NOT IN (''C'') AND dp.is_fixed_role <> 1 AND dp.name NOT LIKE ''##%'' ORDER BY DBName'
+INSERT @DBusers
+EXEC sp_MSforeachdb @SQLStatement
+
+SELECT * FROM @DBusers 
+WHERE UserName IN (SELECT name FROM master.dbo.syslogins) 
+AND UserName NOT IN ('akbsqlsa', 'AKNET\Backup Admins', 'AKNET\SistemGuvenlik','AKNET\SistemGüvenlik','AKNET\sqladmin','AKNET\sqladminusr','AKNET\taddm','AKNET\aksecmongroup','UG_DB_ADMIN','NUYACL1','cyadm')
+AND UserName NOT IN (SELECT AccountName FROM #SvcAccTable)
+AND (UserName NOT LIKE ('NT %') AND UserName NOT LIKE ('##%') AND UserName NOT LIKE ('%$'))
+ORDER BY DBName
+
+DROP TABLE #SvcAccTable
+
+
+/***** Objects Permissions for All Databases *****/
+DECLARE @Obj VARCHAR(4000)
+DECLARE @T_Obj TABLE ([InstanceName] NVARCHAR(50), [DatabaseName] NVARCHAR(100), [ObjectName] SYSNAME, [UserName] SYSNAME, [Permission] NVARCHAR(128))
+SET @Obj='
+USE [?]
+SELECT @@SERVERNAME AS [InstanceName], ''?'' AS [DatabaseName], obj.name AS [ObjectName], usr.name AS [UserName], dp.permission_name AS [Permission]
+FROM sys.database_permissions dp
+JOIN sys.sysusers usr ON dp.grantee_principal_id = usr.uid 
+JOIN sys.sysobjects obj ON dp.major_id = obj.id
+JOIN sys.database_principals prn ON usr.name = prn.name
+WHERE usr.name NOT LIKE ''%public%'' AND usr.name NOT LIKE ''%##%'' AND prn.type_desc <> ''DATABASE_ROLE'''
+INSERT @T_Obj 
+EXEC sp_MSforeachdb @Obj
+
+SELECT * FROM @T_Obj 
+WHERE UserName IN (SELECT name FROM master.dbo.syslogins) 
