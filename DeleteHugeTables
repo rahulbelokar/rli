@@ -1,0 +1,48 @@
+-- Deleting records from a large table
+DECLARE @ROWCNT INT , @NUMROWS INT, @TOPNUM INT
+SET @ROWCNT = 0
+SET @NUMROWS = 0
+SET @TOPNUM = 100000 --<--- Set this to the number of rows to delete per batch.
+
+WHILE 1 = 1
+BEGIN
+    PRINT CONVERT(varchar(19), GETDATE(), 120) + ' Started.'
+     
+	DELETE TOP (@TOPNUM) from VpSessions where CreatedDate < DATEADD(MINUTE, -90, 
+
+GETDATE())
+
+    SET @NUMROWS = @@ROWCOUNT
+    PRINT 'Deleting ' + STR(@NUMROWS) + ' records.'
+    SET @ROWCNT = @ROWCNT + @NUMROWS
+    IF @NUMROWS = 0 BREAK
+    PRINT CONVERT(varchar(19), GETDATE(), 120) + ' Finished.'
+
+    -- A delay will help prevent locking/blocking if required.
+    -- WAITFOR DELAY '00:00:00.010'
+END
+PRINT 'TOTAL: ' + STR(@ROWCNT) + ' Records Deleted.'
+
+
+
+----------------------
+With Cursor:
+
+
+DECLARE @idid bigint 
+
+DECLARE db_cursor CURSOR 
+LOCAL FAST_FORWARD
+FOR 
+select ID from VpSessions (nolock) where CreatedDate < DATEADD(MINUTE, -120 , GETDATE()) 
+OPEN db_cursor 
+FETCH NEXT FROM db_cursor INTO @idid
+WHILE @@FETCH_STATUS = 0 
+BEGIN 
+
+delete from VpSessions where ID=@idid
+
+FETCH NEXT FROM db_cursor INTO @idid
+END 
+CLOSE db_cursor 
+DEALLOCATE db_cursor
