@@ -21,6 +21,7 @@ FROM sys.dm_exec_query_stats AS EQS
 	CROSS APPLY sys.dm_exec_sql_text(EQS.sql_handle) AS EST
 	CROSS APPLY sys.dm_exec_query_plan(EQS.plan_handle) AS EQP
 WHERE (EQP.dbid > 4 OR EQP.dbid = NULL)		--Not Equal to System Databases
+--	AND DB_NAME(EQP.dbid) = 'DB_Name'
 	AND EQS.execution_count > 10
 	AND EQS.total_elapsed_time > 3600000	--1 Hour
 ORDER BY 
