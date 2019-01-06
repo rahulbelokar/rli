@@ -1,0 +1,54 @@
+SELECT TOP 25
+	EQS.last_execution_time AS [LastUsage]
+	,DB_NAME(EQP.dbid) AS [DatabaseName]
+	,EQS.total_elapsed_time / EQS.execution_count AS [AvgElapsedTime]
+	,EQS.total_worker_time AS [TotalCPUTime]
+	,EQS.total_worker_time / EQS.execution_count AS [AvgCPUTime]
+	,EQS.total_logical_reads + EQS.total_logical_writes AS [TotalLogicalIO]
+	,(EQS.total_logical_reads + EQS.total_logical_writes) / EQS.execution_count AS [AvgLogicalIO]
+	,EQS.execution_count As [ExecCount]
+	,SUBSTRING(
+		EST.text
+		,1 + EQS.statement_start_offset / 2
+		,(CASE 
+			WHEN EQS.statement_end_offset = -1 THEN LEN(CONVERT(NVARCHAR(MAX), EST.text)) * 2 
+			ELSE EQS.statement_end_offset
+		END - EQS.statement_start_offset ) / 2
+	) AS [SQL_Statement]
+	,EST.text AS [SQL_Text]
+	,EQP.[query_plan] AS [QueryPlan]
+FROM sys.dm_exec_query_stats AS EQS
+	CROSS APPLY sys.dm_exec_sql_text(EQS.sql_handle) AS EST
+	CROSS APPLY sys.dm_exec_query_plan(EQS.plan_handle) AS EQP
+WHERE (EQP.dbid > 4 OR EQP.dbid = NULL)		--Not Equal to System Databases
+	AND EQS.execution_count > 10
+	AND EQS.total_elapsed_time > 3600000	--1 Hour
+ORDER BY 
+	EQS.total_elapsed_time / EQS.execution_count DESC	--AvgElapsedTime
+--	EQS.total_worker_time / EQS.execution_count DESC	--AvgCPUTime
+--	(EQS.total_logical_reads + EQS.total_logical_writes) / EQS.execution_count DESC	--AvgLogicalIO
+
+
+----------------------------
+
+
+SELECT TOP 100 SUBSTRING(qt.TEXT, (qs.statement_start_offset/2)+1,
+((CASE qs.statement_end_offset
+WHEN -1 THEN DATALENGTH(qt.TEXT)
+ELSE qs.statement_end_offset
+END - qs.statement_start_offset)/2)+1),
+qs.execution_count,
+qs.total_logical_reads, qs.last_logical_reads,
+qs.total_logical_writes, qs.last_logical_writes,
+qs.total_worker_time,
+qs.last_worker_time,
+qs.total_elapsed_time/1000000 total_elapsed_time_in_S,
+qs.last_elapsed_time/1000000 last_elapsed_time_in_S,
+qs.last_execution_time,
+qp.query_plan
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+--ORDER BY qs.total_logical_reads DESC	-- logical reads
+--ORDER BY qs.total_logical_writes DESC	-- logical writes
+ORDER BY qs.total_worker_time/qs.execution_count DESC
