@@ -1,0 +1,64 @@
+SELECT
+	[spid],
+	RTRIM(sp.[status]) AS [Status],
+	RTRIM([loginame]) AS [Login],
+	RTRIM([hostname]) AS [Hostname], 
+	[blocked] AS [Blocker],
+	sd.[name] AS [DBName], 
+	[cmd] AS [Command],
+	[cpu] AS [CPUTime],
+	[memusage] AS [Memory],
+	[physical_io] AS [DiskIO],
+	RTRIM([lastwaittype]) AS [LastWaitType],
+	RTRIM([program_name]) AS [ProgramName],
+	[last_batch] AS [LastBatch],
+	[login_time] AS [LoginTime],
+	'kill ' + CAST([spid] AS VARCHAR(10)) AS [KillCommand]
+FROM [master].[dbo].[sysprocesses] sp 
+JOIN [master].[dbo].[sysdatabases] sd ON sp.[dbid] = sd.[dbid]
+WHERE sd.[name] NOT IN ('master', 'model', 'msdb') 
+--	AND sd.[name] = 'db_name' 
+--	AND RTRIM([hostname]) LIKE 'hostname1%' 
+--	AND RTRIM([loginame]) LIKE 'username1%'
+ORDER BY [spid]
+
+
+/*** Automatically Kill Sessions with Cursor (Carefully Specify Where Condition) ***
+DECLARE @sqlcommand NVARCHAR(500)
+DECLARE crsr CURSOR FOR
+----------------------------------
+SELECT
+	'kill ' + CAST([spid] AS VARCHAR(10)) AS [KillCommand]
+FROM [master].[dbo].[sysprocesses] sp 
+JOIN [master].[dbo].[sysdatabases] sd ON sp.[dbid] = sd.[dbid]
+WHERE sd.[name] NOT IN ('master', 'model', 'msdb') 
+	AND sd.[name] = 'db_name' 
+	AND RTRIM([hostname]) LIKE 'hostname1%' 
+	AND RTRIM([loginame]) LIKE 'username1%'
+----------------------------------
+OPEN crsr
+FETCH NEXT FROM crsr INTO @sqlcommand
+WHILE @@FETCH_STATUS = 0
+BEGIN
+----------------------------------
+	EXEC sp_executesql @sqlcommand
+----------------------------------
+FETCH NEXT FROM crsr INTO @sqlcommand
+END
+CLOSE crsr
+DEALLOCATE crsr
+*/
+
+
+----------------------------
+Kill Internal Processes with MSDTC
+
+SELECT DISTINCT request_owner_guid,  'KILL ''' +  CAST(request_owner_guid AS VARCHAR(100)) + '''' AS KillCommand      
+FROM sys.dm_tran_locks
+WHERE request_session_id =-2
+
+----------------------------
+
+SELECT DISTINCT(req_transactionUOW), 'KILL ''' +  CAST(req_transactionUOW AS VARCHAR(100)) + '''' AS KillCommand
+FROM syslockinfo 
+WHERE req_spid = '-2'
