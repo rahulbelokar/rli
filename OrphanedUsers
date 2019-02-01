@@ -1,0 +1,41 @@
+-- List orphaned users which under a database.
+EXEC sp_change_users_login 'Report'
+
+-- Fix the user which cannot match sid with sql login.
+EXEC sp_change_users_login 'Auto_fix', [DOMAIN\USERNAME] --For Windows NT Users
+
+-- Mapping with different login
+EXEC sp_change_users_login 'UPDATE_ONE', 'username', 'loginname'
+
+-------------------------
+
+CREATE TABLE ##TTusers
+( 
+[DBname] VARCHAR(100), 
+[UserName] VARCHAR(100), 
+[UserType] VARCHAR(100),
+[FIX-DROP_Command] VARCHAR(200)
+) 
+ 
+EXEC SP_MSFOREACHDB '
+USE [?] 
+INSERT INTO ##TTusers
+SELECT DB_NAME() AS [DBname],
+name AS [UserName],
+CASE
+	WHEN isntgroup = 0 AND isntuser = 0 THEN ''SQL LOGIN'' 
+	WHEN isntgroup = 1 THEN ''NT GROUP'' 
+	WHEN isntgroup = 0 AND isntuser = 1 THEN ''NT LOGIN'' 
+END AS [UserType], 
+CASE 
+	WHEN name NOT IN (SELECT name FROM sys.syslogins) THEN ''USE ['' + DB_NAME() + '']; DROP USER ['' + name + ''];''
+	ELSE ''EXEC sp_change_users_login ''''Auto_fix'''', ['' + name + ''];''
+END AS [FIX-DROP_Command]
+FROM sys.sysusers 
+WHERE sid IS NOT NULL AND sid <> 0X0 
+AND islogin = 1
+AND status <> 0
+' 
+ 
+SELECT * FROM ##TTusers ORDER BY [DBname], [FIX-DROP_Command]
+DROP TABLE ##TTusers
