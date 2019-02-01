@@ -1,0 +1,146 @@
+---- Send Job Result via Email
+
+/*
+First you should set up SQL Mail Profile.
+Please change @dbName, @SQLscript, @mailbody and mail account values. When changing your @SQLscript value be careful that replace (with CTRL+H) single quota (') to double quotas ('').
+*/
+DECLARE @dbName nvarchar(50), @SQLscript nvarchar(4000), @subject varchar(100), @mailfrom varchar(100), @mailbody nvarchar(4000), @jobName varchar(100)
+SELECT @jobName = name from msdb..sysjobs where job_id = $(ESCAPE_NONE(JOBID))
+SELECT @mailfrom = @@SERVICENAME + ' <' + cast(SERVERPROPERTY('ComputerNamePhysicalNETBIOS') as varchar(50)) + '@domain.com>'
+SELECT @subject = N'SQL Server Job Result [Job: ' + @jobName + ']'
+
+SELECT @dbName = 'Database'
+SELECT @SQLscript = '
+INSERT INTO [Database].[Schema].[Table] (
+  Column1
+ ,Column2
+ ) VALUES (
+  ''Value1''
+ ,''Value2'' ) 
+'
+
+SELECT @mailbody = N'
+	Depending on case number 1234-5678-90 your script executed on <b>' + @@SERVERNAME + N'</b> instance and <b>' + @dbName + '</b> database. Script info and results are shown below. <br><br>' + 
+	'<b>Script: </b><br>' + @SQLscript + '<br><br>' + 
+	'<b>Result: </b><br>'
+
+EXEC msdb.dbo.sp_send_dbmail
+@profile_name = 'sqlmailprofile',
+@from_address = @mailfrom,
+@recipients = '<mail1@domain.com>;<mail2@domain.com>',
+@copy_recipients = '<mail3@domain.com>',
+@reply_to = '<mail3@domain.com>',
+@subject = @subject,
+@body = @mailbody,
+@body_format = 'HTML',
+@importance = 'HIGH',
+@execute_query_database = @dbName,
+@query = @SQLscript
+/* If you want to send results with attached file:
+@attach_query_result_as_file = 1,
+@query_attachment_filename = 'script_output.csv',
+@query_result_separator=@tab,
+@query_result_width =32767,
+@query_result_no_padding=1,
+@exclude_query_output=1,
+@query_result_header=1
+*/
+
+-------------------------------------------------------
+
+-- HTML Mail Sample:
+DECLARE @mailfrom varchar(max)
+DECLARE @subject varchar(100)
+DECLARE @tableHTML NVARCHAR(MAX), @tableHTML1 NVARCHAR(MAX), @tableHTML2 NVARCHAR(MAX), @mailbody NVARCHAR(MAX)
+DECLARE @Table1 NVARCHAR(MAX), @Table2 NVARCHAR(MAX)
+DECLARE @jobName varchar(100)
+SELECT @jobName = name from msdb..sysjobs where job_id = $(ESCAPE_NONE(JOBID))
+
+
+IF ( SELECT COUNT(*) FROM [dbareports].[info].[AlwaysOnCheck] WHERE Environment = 'Production' AND ([PrimaryCommitDelay(ms)] > 80 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
+BEGIN
+SET @Table1 = N''
+SELECT @Table1 = @Table1 + '<tr style="font-size:13px;background-color:#FFFFFF">' + 
+	'<td>' + COALESCE(NULLIF(AGGroupName,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(DatabaseName,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(PrimaryInstance,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(SynchronizationHealth,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(CAST([PrimaryCommitDelay(ms)] AS VARCHAR(25)),''), 'ASYNCHRONOUS') + '</td>' +
+	'<td>' + COALESCE(NULLIF(CAST([SecondarySyncDelay(sec)] as VARCHAR(25)),''), '') + '</td>' +'</tr>'  
+FROM [dbareports].[info].[AlwaysOnCheck]
+WHERE Environment = 'Production' AND ([PrimaryCommitDelay(ms)] > 80 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY')
+ORDER BY [PrimaryCommitDelay(ms)],[SecondarySyncDelay(sec)] DESC
+	
+SET @tableHTML1 = 
+N'<table border="1" align="Left" cellpadding="2" cellspacing="0" style="color:black;font-family:arial,helvetica,sans-serif;text-align:left;" >' +
+N'<tr style ="font-size:13px;font-weight: normal;background: #FFFFFF"> 
+<th align=left>AGGroupName</th>
+<th align=left>DatabaseName</th>
+<th align=left>PrimaryInstance</th>
+<th align=left>SynchronizationHealth</th>
+<th align=left>PrimaryCommitDelay(ms)</th> 
+<th align=left>SecondarySyncDelay(sec)</th> </tr>' + @Table1 + '</table>'
+END
+ELSE
+BEGIN
+SET @tableHTML1 = N''
+SET @Table1 = N''
+END
+
+
+IF ( SELECT COUNT(*) FROM [dbareports].[info].[AlwaysOnCheck] WHERE Environment = 'Test' AND ([PrimaryCommitDelay(ms)] > 10000 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
+BEGIN
+SET @Table2 = N''
+SELECT @Table2 = @Table2 + '<tr style="font-size:13px;background-color:#FFFFFF">' + 
+	'<td>' + COALESCE(NULLIF(AGGroupName,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(DatabaseName,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(PrimaryInstance,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(SynchronizationHealth,''), '') + '</td>' +
+	'<td>' + COALESCE(NULLIF(CAST([PrimaryCommitDelay(ms)] AS VARCHAR(25)),''), 'ASYNCHRONOUS') + '</td>' +
+	'<td>' + COALESCE(NULLIF(CAST([SecondarySyncDelay(sec)] as VARCHAR(25)),''), '') + '</td>' +'</tr>'  
+FROM [dbareports].[info].[AlwaysOnCheck]
+WHERE Environment = 'Test' AND ([PrimaryCommitDelay(ms)] > 10000 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY')
+ORDER BY [PrimaryCommitDelay(ms)],[SecondarySyncDelay(sec)] DESC
+	
+SET @tableHTML2 = 
+N'<table border="1" align="Left" cellpadding="2" cellspacing="0" style="color:black;font-family:arial,helvetica,sans-serif;text-align:left;" >' +
+N'<tr style ="font-size:13px;font-weight: normal;background: #FFFFFF"> 
+<th align=left>AGGroupName</th>
+<th align=left>DatabaseName</th>
+<th align=left>PrimaryInstance</th>
+<th align=left>SynchronizationHealth</th>
+<th align=left>PrimaryCommitDelay(ms)</th> 
+<th align=left>SecondarySyncDelay(sec)</th> </tr>' + @Table2 + '</table>'
+END
+ELSE
+BEGIN
+SET @tableHTML2 = N''
+SET @Table2 = N''
+END
+
+
+SET @tableHTML = @tableHTML1 + @tableHTML2
+
+
+IF (SELECT @tableHTML2) = ''
+SELECT @subject = N'SQL Server AlwaysOn Synchronization Check for Prod Servers [Job: ' + @jobName + ']'
+ELSE IF (SELECT @tableHTML1) = ''
+SELECT @subject = N'SQL Server AlwaysOn Synchronization Check for Test Servers [Job: ' + @jobName + ']'
+ELSE
+SELECT @subject = N'SQL Server AlwaysOn Synchronization Check for [Job: ' + @jobName + ']'
+
+
+IF (SELECT @tableHTML) <> ''
+BEGIN
+SET @mailbody = N' AlwaysOn yapıda olup <b>HEALTHY</b> statüde olmayan veya Primary node (synchronous) için commit time gecikmesi Prod sunucular için <b>20 ms.</b>, Test sunucular için <b>200 ms.</b> veya Secondary Replica için senkronizasyon gecikmesi <b>1000 sn.</b> üzerinde olan database bilgileri aşağıdaki gibidir.<br><br>' + @tableHTML
+SELECT @mailfrom = 'SQL Admin <' + cast(SERVERPROPERTY('ComputerNamePhysicalNETBIOS') as varchar(50)) + '@domain.com>'
+    EXEC msdb.dbo.sp_send_dbmail
+    @profile_name= 'sqlmail',
+    @recipients= '<sqldba@domain.com>',
+    @from_address = @mailfrom,
+    @reply_to = '<sqldba@domain.com>',
+    @subject = @subject,
+    @body = @mailbody,
+    @body_format = 'HTML'
+   ,@importance = 'HIGH'
+END
