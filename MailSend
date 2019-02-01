@@ -57,7 +57,7 @@ DECLARE @jobName varchar(100)
 SELECT @jobName = name from msdb..sysjobs where job_id = $(ESCAPE_NONE(JOBID))
 
 
-IF ( SELECT COUNT(*) FROM [dbareports].[info].[AlwaysOnCheck] WHERE Environment = 'Production' AND ([PrimaryCommitDelay(ms)] > 80 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
+IF ( SELECT COUNT(*) FROM [database].[schema].[table] WHERE Environment = 'Production' AND ([PrimaryCommitDelay(ms)] > 80 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
 BEGIN
 SET @Table1 = N''
 SELECT @Table1 = @Table1 + '<tr style="font-size:13px;background-color:#FFFFFF">' + 
@@ -88,7 +88,7 @@ SET @Table1 = N''
 END
 
 
-IF ( SELECT COUNT(*) FROM [dbareports].[info].[AlwaysOnCheck] WHERE Environment = 'Test' AND ([PrimaryCommitDelay(ms)] > 10000 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
+IF ( SELECT COUNT(*) FROM [database].[schema].[table] WHERE Environment = 'Test' AND ([PrimaryCommitDelay(ms)] > 10000 OR [SecondarySyncDelay(sec)] > 1000 OR SynchronizationHealth <> 'HEALTHY') ) > 0
 BEGIN
 SET @Table2 = N''
 SELECT @Table2 = @Table2 + '<tr style="font-size:13px;background-color:#FFFFFF">' + 
