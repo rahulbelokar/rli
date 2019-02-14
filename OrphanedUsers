@@ -28,7 +28,7 @@ CASE
 	WHEN isntgroup = 0 AND isntuser = 1 THEN ''NT LOGIN'' 
 END AS [UserType], 
 CASE 
-	WHEN name NOT IN (SELECT name FROM sys.syslogins) THEN ''USE ['' + DB_NAME() + '']; DROP USER ['' + name + ''];''
+	WHEN name NOT IN (SELECT name /*COLLATE db_collation*/ FROM sys.syslogins) THEN ''USE ['' + DB_NAME() + '']; DROP USER ['' + name + ''];''
 	ELSE ''EXEC sp_change_users_login ''''Auto_fix'''', ['' + name + ''];''
 END AS [FIX-DROP_Command]
 FROM sys.sysusers 
