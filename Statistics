@@ -1,0 +1,57 @@
+Shrink işleminden sonra statistics update edilmelidir. Büyük tablolarda ayrıca fullscan de yapılmalıdır (Temp ve Logu biraz büyütebilir).
+
+update statistics Table_Name
+go
+
+update statistics Table_Name with fullscan
+go
+
+--------------
+
+Full Scan'in durumunu izlemek için aşağıdaki şekilde kontrol yapılabilir. Full scan işlemi bittiğinde Rows kolonu Rows Sampled kolonu ile eşitlenmiş olacaktır.
+
+SELECT
+OBJECT_NAME([sp].[object_id]) AS "Table",
+[sp].[stats_id] AS "Statistic ID",
+[s].[name] AS "Statistic",
+[sp].[last_updated] AS "Last Updated",
+[sp].[rows],
+[sp].[rows_sampled],
+[sp].[unfiltered_rows],
+[sp].[modification_counter] AS "Modifications",
+'DROP STATISTICS ' + OBJECT_NAME([sp].[object_id]) + '.' + [s].[name] AS 'DROP Command'
+FROM [sys].[stats] AS [s]
+OUTER APPLY sys.dm_db_stats_properties ([s].[object_id],[s].[stats_id]) AS [sp]
+WHERE --[s].[name] LIKE '_dta%' AND 
+OBJECT_NAME([sp].[object_id]) IN 
+('kkIPMACQ')
+
+
+-------------
+
+Tüm tablolar için:
+
+CREATE TABLE #Stats_Temp ([Table] NVARCHAR(200), [Statistic ID] BIGINT, [Statistic] NVARCHAR(200), [LastUpdated] DATETIME, [rows] BIGINT, [rows_sampled] BIGINT, [unfiltered_rows] BIGINT, [Modifications] BIGINT, [DROP_Command] NVARCHAR(200), [UPDATE_Command] NVARCHAR(200))
+INSERT INTO #Stats_Temp
+EXEC sp_MSforeachtable '
+SELECT
+''?'' AS "Table",
+[sp].[stats_id] AS "Statistic ID",
+[s].[name] AS "Statistic",
+[sp].[last_updated] AS "LastUpdated",
+[sp].[rows],
+[sp].[rows_sampled],
+[sp].[unfiltered_rows],
+[sp].[modification_counter] AS "Modifications",
+''DROP STATISTICS '' + ''?'' + ''.'' + [s].[name] AS ''DROP_Command'',
+''UPDATE STATISTICS '' + ''?'' + '' WITH FULLSCAN'' AS ''UPDATE_Command''
+FROM [sys].[stats] AS [s]
+OUTER APPLY sys.dm_db_stats_properties ([s].[object_id],[s].[stats_id]) AS [sp]
+--WHERE [s].[name] LIKE ''_dta%'' 
+--AND OBJECT_NAME([sp].[object_id]) IN (''kkIPMACQ'')
+'
+SELECT * FROM #Stats_Temp
+--WHERE [Statistic] LIKE '_dta%'
+--AND [Table] LIKE '%kredi%'
+ORDER BY [Modifications] DESC
+DROP TABLE #Stats_Temp
