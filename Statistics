@@ -24,7 +24,7 @@ FROM [sys].[stats] AS [s]
 OUTER APPLY sys.dm_db_stats_properties ([s].[object_id],[s].[stats_id]) AS [sp]
 WHERE --[s].[name] LIKE '_dta%' AND 
 OBJECT_NAME([sp].[object_id]) IN 
-('kkIPMACQ')
+('table_name')
 
 
 -------------
@@ -48,10 +48,10 @@ SELECT
 FROM [sys].[stats] AS [s]
 OUTER APPLY sys.dm_db_stats_properties ([s].[object_id],[s].[stats_id]) AS [sp]
 --WHERE [s].[name] LIKE ''_dta%'' 
---AND OBJECT_NAME([sp].[object_id]) IN (''kkIPMACQ'')
+--AND OBJECT_NAME([sp].[object_id]) IN (''table_name'')
 '
 SELECT * FROM #Stats_Temp
 --WHERE [Statistic] LIKE '_dta%'
---AND [Table] LIKE '%kredi%'
+--AND [Table] LIKE '%table_name%'
 ORDER BY [Modifications] DESC
 DROP TABLE #Stats_Temp
