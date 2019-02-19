@@ -1,0 +1,96 @@
+sp_spaceused '[schema_name].[table_name]'
+
+--------------
+
+SELECT name as 'Table', MAX(create_date) as 'CreateDate', MAX(modify_date) as 'ModifyDate'
+FROM sys.tables
+GROUP BY name
+ORDER BY name
+
+
+---------------
+
+Table List, Size, Row Count
+
+
+SELECT 
+    s.Name AS [Schema],
+    t.NAME AS [Table],
+    p.rows AS [Rows],
+    SUM(a.total_pages) * 8/1024 AS TotalSpaceMB, 
+    SUM(a.used_pages) * 8/1024 AS UsedSpaceMB, 
+    (SUM(a.total_pages) - SUM(a.used_pages)) * 8/1024 AS UnusedSpaceMB
+FROM 
+    sys.tables t
+INNER JOIN      
+    sys.indexes i ON t.OBJECT_ID = i.object_id
+INNER JOIN 
+    sys.partitions p ON i.object_id = p.OBJECT_ID AND i.index_id = p.index_id
+INNER JOIN 
+    sys.allocation_units a ON p.partition_id = a.container_id
+LEFT OUTER JOIN 
+    sys.schemas s ON t.schema_id = s.schema_id
+WHERE 
+    t.NAME NOT LIKE 'dt%' 
+    AND t.is_ms_shipped = 0
+    AND i.OBJECT_ID > 255 
+GROUP BY 
+    t.Name, s.Name, p.Rows
+ORDER BY 
+    t.Name
+
+
+----------------
+
+Database & Table List, Size, Row Count
+
+
+CREATE TABLE #TableInfo ([DatabaseName] varchar(100), [SchemaName] varchar(25),	[TableName] nvarchar(100), [TableType] varchar(50),	[IndexName] nvarchar(100), [IndexType] varchar(50),	[PartitionNumber] int, [PartitionRows] bigint, [StatRowCount] bigint, [UsedSizeKB] bigint, [ReservedSizeKB] bigint)
+GO
+
+sp_msforeachdb 'USE [?];
+IF ''?'' NOT IN (''master'',''model'',''msdb'',''tempdb'')
+BEGIN
+INSERT INTO #TableInfo
+SELECT  
+	''?'' as DatabaseName
+	,SCH.name AS SchemaName 
+	,OBJ.name AS TableName 
+	,OBJ.type_desc AS TableType 
+	,INDX.name AS IndexName 
+	,INDX.type_desc AS IndexType 
+	,PART.partition_number AS PartitionNumber 
+	,PART.rows AS PartitionRows 
+	,STAT.row_count AS StatRowCount 
+	,STAT.used_page_count * 8 AS UsedSizeKB 
+	,STAT.reserved_page_count * 8 AS ReservedSizeKB 
+FROM sys.partitions AS PART 
+	INNER JOIN sys.dm_db_partition_stats AS STAT 
+		ON PART.partition_id = STAT.partition_id AND PART.partition_number = STAT.partition_number 
+	INNER JOIN sys.objects AS OBJ 
+		ON STAT.object_id = OBJ.object_id 
+	INNER JOIN sys.schemas AS SCH 
+		ON OBJ.schema_id = SCH.schema_id 
+	INNER JOIN sys.indexes AS INDX 
+		ON STAT.object_id = INDX.object_id AND STAT.index_id = INDX.index_id
+WHERE SCH.name <> ''sys'' AND OBJ.type_desc = ''USER_TABLE''
+ORDER BY SCH.name, OBJ.name, INDX.name, PART.partition_number
+END'
+
+SELECT DatabaseName, SchemaName, TableName, MAX(StatRowCount) as 'RowCount', MAX(UsedSizeKB) as UsedSizeKB, MAX(ReservedSizeKB) as ReservedSizeKB
+FROM #TableInfo 
+--WHERE DatabaseName IN ('dbname1', 'dbname2')
+GROUP BY DatabaseName, SchemaName, TableName
+ORDER BY 5 DESC
+DROP TABLE #TableInfo
+GO
+
+
+------------------
+
+List Table & Column Collations:
+
+select object_name(object_id) as tablename, name as columnname,collation_name
+from sys.columns
+where collation_name is not null and collation_name <> 'SQL_Latin1_General_CP1_CI_AS'
+order by object_name(object_id),column_id
