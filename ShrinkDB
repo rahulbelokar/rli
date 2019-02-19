@@ -1,0 +1,59 @@
+CREATE TABLE #TTable (ShrinkCommand nvarchar(1000))
+INSERT INTO #TTable
+EXEC sp_MSforeachdb '
+DECLARE @sqlcommand nvarchar (500)
+IF ''?'' NOT IN (''master'', ''model'', ''msdb'')
+BEGIN
+USE [?]
+SELECT
+''USE ['' + DB_NAME() + '']; DBCC SHRINKFILE (N'''''' + [name] + '''''', 0);'' AS [ShrinkCommand]
+FROM sys.database_files
+WHERE (type_desc = ''LOG'' OR type_desc = ''ROWS'') AND										-- Log or Data File
+(size - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT))/128/1024 > 50						-- Free space 50GB dan büyük
+AND ROUND((size - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS FLOAT))/size, 2)*100 >= 20		-- Free space oranı %25in üzerinde olan
+END'
+
+
+DECLARE @sqlcommand NVARCHAR(500)
+DECLARE crsr CURSOR FOR
+----------------------------------
+SELECT * FROM #TTable
+----------------------------------
+OPEN crsr
+FETCH NEXT FROM crsr INTO @sqlcommand
+WHILE @@FETCH_STATUS = 0
+BEGIN
+----------------------------------
+	EXEC sp_executesql @sqlcommand
+----------------------------------
+FETCH NEXT FROM crsr INTO @sqlcommand
+END
+CLOSE crsr
+DEALLOCATE crsr
+DROP TABLE #TTable
+
+
+/* 
+CREATE TABLE #TTable ([DatabaseName] NVARCHAR(100), [LogicalName] NVARCHAR(100), [Type] VARCHAR(25), SizeGB BIGINT, FreeSpaceGB BIGINT, PercentFree FLOAT, ShrinkCommand nvarchar(1000))
+INSERT INTO #TTable
+EXEC sp_MSforeachdb '
+DECLARE @sqlcommand nvarchar (500)
+IF ''?'' NOT IN (''master'', ''model'', ''msdb'')
+BEGIN
+USE [?]
+SELECT
+DB_NAME() AS [DatabaseName], 
+name AS [LogicalName], 
+type_desc AS [Type],
+size/128/1024 AS SizeGB, 
+(size/128 - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT)/128)/1024 AS FreeSpaceGB,
+ROUND((size - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS FLOAT))/size, 2)*100 AS PercentFree,
+''USE ['' + DB_NAME() + '']; DBCC SHRINKFILE (N'''''' + [name] + '''''', 0);'' AS [ShrinkCommand]
+FROM sys.database_files
+WHERE (type_desc = ''LOG'' OR type_desc = ''ROWS'') AND										-- Log or Data File
+(size - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS INT))/128/1024 > 50						-- Free space 50GB dan büyük
+AND ROUND((size - CAST(FILEPROPERTY(name, ''SpaceUsed'') AS FLOAT))/size, 2)*100 >= 20		-- Free space oranı %25in üzerinde olan
+END'
+SELECT * FROM #TTable
+DROP TABLE #TTable
+*/
