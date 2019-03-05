@@ -1,0 +1,10 @@
+/*** If many statements which have low cost wait with NULL wait_type they may use wrong plan ***/
+SELECT * FROM sys.dm_exec_cached_plans
+
+/*** Get plan handle for your statement ***/
+SELECT txt.text, eqs.plan_handle FROM sys.dm_exec_query_stats AS eqs
+	CROSS APPLY sys.dm_exec_sql_text(eqs.plan_handle) AS txt
+WHERE txt.text LIKE 'SELECT %FROM %'
+
+/*** Run free proc cache for your plan ***/
+DBCC FREEPROCCACHE(plan_handle)
