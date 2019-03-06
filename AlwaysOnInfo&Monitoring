@@ -1,0 +1,106 @@
+IF (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1
+BEGIN
+WITH CTE_AGinfo AS (
+        SELECT 
+			AGS.[name] AS [AGGroupName], 
+			ARE.[replica_server_name] AS [InstanceName], 
+			HRS.[role_desc], 
+			DB_NAME(DRS.[database_id]) AS [DBName], 
+			DRS.[database_id], 
+			ARE.[availability_mode_desc] AS [SyncMode], 
+			DRS.[synchronization_state_desc] AS [SyncState], 
+			DRS.[last_hardened_lsn], 
+			DRS.[end_of_log_lsn], 
+			DRS.[last_redone_lsn], 
+			DRS.[last_hardened_time], -- On a secondary database, time of the log-block identifier for the last hardened LSN (last_hardened_lsn).
+			DRS.[last_redone_time], -- Time when the last log record was redone on the secondary database.
+			DRS.[log_send_queue_size], 
+			DRS.[redo_queue_size],
+			DRS.[last_commit_time]
+        FROM [master].[sys].[dm_hadr_database_replica_states] DRS 
+			LEFT JOIN [master].[sys].[availability_replicas] ARE ON DRS.[replica_id] = ARE.[replica_id]
+			LEFT JOIN [master].[sys].[availability_groups] AGS ON ARE.[group_id] = AGS.[group_id]
+			LEFT JOIN [master].[sys].[dm_hadr_availability_replica_states] HRS ON ARE.[group_id] = HRS.[group_id] AND ARE.[replica_id] = HRS.[replica_id] ),
+    
+	CTE_PriCommit AS ( 
+		SELECT [AGGroupName], [DBName], [last_commit_time]
+        FROM CTE_AGinfo
+        WHERE [role_desc] = 'PRIMARY' ),
+   
+	CTE_RepSync AS ( 
+		SELECT [AGGroupName], [DBName], [last_commit_time]
+		FROM CTE_AGinfo
+		WHERE [role_desc] = 'SECONDARY' AND [InstanceName] IN (SELECT DISTINCT [replica_server_name] FROM [master].[sys].[availability_replicas]) ),
+	
+	CTE_TDelay AS ( 
+		SELECT [instance_name], [cntr_value] 
+		FROM [master].[sys].[dm_os_performance_counters]
+		WHERE RTRIM([object_name]) LIKE '%:Database Replica' AND [counter_name] = 'Transaction Delay' AND RTRIM([instance_name]) <> '_Total' ),
+	
+	CTE_WritePS AS ( 
+		SELECT [instance_name], [cntr_value] 
+		FROM [master].[sys].[dm_os_performance_counters]
+		WHERE RTRIM([object_name]) LIKE '%:Database Replica' AND [counter_name] = 'Mirrored Write Transactions/sec' AND RTRIM([instance_name]) <> '_Total' )
+
+SELECT DISTINCT 
+	@@SERVERNAME AS [InstanceName]
+	,CTE_PriCommit.[AGGroupName]
+	,CTE_PriCommit.[DBName] AS [DatabaseName]
+	,AGL.[dns_name] AS [ListenerName]
+	,AGI.[ip_address] AS [ListenerIP]
+	,AGL.[port] AS [ListenerPort]
+	,ARS.[role_desc] AS [Role]
+	,ARN.[availability_mode_desc] AS [AvailabilityMode]
+	,ARN.[failover_mode_desc] AS [FailoverMode]
+	,UPPER(AGC.[automated_backup_preference_desc]) AS [BackupPreference]
+	,DRS.[synchronization_health_desc] AS [SynchronizationHealth]
+	,CASE 
+		WHEN ARN.[availability_mode_desc] = 'ASYNCHRONOUS_COMMIT' THEN NULL
+		WHEN ARN.[availability_mode_desc] = 'SYNCHRONOUS_COMMIT' THEN (CTE_TDelay.[cntr_value]) / (CTE_WritePS.[cntr_value]) 
+	 END AS [PrimaryCommitDelay(ms)]
+	,DATEDIFF(ss, CTE_RepSync.[last_commit_time], CTE_PriCommit.[last_commit_time]) AS [SecondarySyncDelay(sec)]
+--	,CTE_PriCommit.[last_commit_time] AS [PrimaryLastCommitTime]
+--	,CTE_RepSync.[last_commit_time] AS [SecondaryLastCommitTime]
+--	,GETDATE() AS [TimeStamp]
+FROM CTE_PriCommit
+	LEFT JOIN CTE_RepSync ON CTE_PriCommit.[DBName] = CTE_RepSync.[DBName]
+	LEFT JOIN CTE_TDelay ON CTE_PriCommit.[DBName] = CTE_TDelay.[instance_name]
+	LEFT JOIN CTE_WritePS ON CTE_TDelay.[instance_name] = CTE_WritePS.[instance_name] AND CTE_WritePS.[cntr_value] > 0
+	LEFT JOIN [master].[sys].[availability_groups_cluster] AGC ON AGC.[name] = CTE_PriCommit.[AGGroupName]
+	LEFT JOIN [master].[sys].[dm_hadr_availability_replica_cluster_states] AS RCS ON RCS.[group_id] = AGC.[group_id]
+	LEFT JOIN [master].[sys].[dm_hadr_availability_replica_states] AS ARS ON ARS.[replica_id] = RCS.[replica_id]
+	LEFT JOIN [master].[sys].[availability_group_listeners] AS AGL ON AGL.[group_id] = ARS.[group_id]
+	LEFT JOIN [master].[sys].[availability_group_listener_ip_addresses] AS AGI ON AGI.[listener_id] = AGL.[listener_id]
+	LEFT JOIN [master].[sys].[availability_databases_cluster] AS AGD ON AGD.[group_id] = AGL.[group_id]
+	LEFT JOIN [master].[sys].[availability_replicas] AS ARN ON ARS.[replica_id] = ARN.[replica_id] AND ARS.[is_local] = 1
+	LEFT JOIN [master].[sys].[dm_hadr_database_replica_states] DRS ON DRS.[group_id] = ARS.[group_id]
+WHERE ARS.[role_desc] = 'PRIMARY'
+ORDER BY 1, 2, 3
+END
+
+
+----------------
+
+
+IF (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1
+SELECT DISTINCT
+	SERVERPROPERTY('ComputerNamePhysicalNETBIOS') AS [ServerName]
+	,@@SERVERNAME AS [InstanceName]
+	,AGD.[database_name] AS [AGdatabase]
+	,[name] AS [AGname]
+	,[dns_name] AS [ListenerName]
+	,AGI.[ip_address] AS [ListenerIP]
+	,[port] AS [ListenerPort]
+	,[role_desc] AS [Role]
+	,[availability_mode_desc] AS [AvailabilityMode]
+	,[failover_mode_desc] AS [FailoverMode]
+	,DRS.[synchronization_health_desc] AS [SynchronizationHealth]
+	,UPPER([automated_backup_preference_desc]) AS [BackupPreference]
+FROM sys.availability_groups_cluster AS AGC
+	INNER JOIN [master].[sys].[dm_hadr_availability_replica_cluster_states] AS RCS ON RCS.[group_id] = AGC.[group_id]
+	INNER JOIN [master].[sys].[dm_hadr_availability_replica_states] AS ARS ON ARS.[replica_id] = RCS.[replica_id]
+	INNER JOIN [master].[sys].[availability_group_listeners] AS AGL ON AGL.[group_id] = ARS.[group_id]
+	INNER JOIN [master].[sys].[availability_group_listener_ip_addresses] AS AGI ON AGI.[listener_id] = AGL.[listener_id]
+	INNER JOIN [master].[sys].[availability_databases_cluster] AS AGD ON AGD.[group_id] = AGL.[group_id]
+	INNER JOIN [master].[sys].[availability_replicas] AS ARN ON ARS.replica_id = ARN.[replica_id] AND ARS.[is_local] = 1
+	INNER JOIN [master].[sys].[dm_hadr_database_replica_states] AS DRS ON DRS.[group_id] = ARS.[group_id]
