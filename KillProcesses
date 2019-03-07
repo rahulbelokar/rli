@@ -4,7 +4,8 @@ SELECT DISTINCT
 	RTRIM(sp.[loginame]) AS [Login],
 	sd.[name] AS [DBName],
 	RTRIM(sp.[hostname]) AS [Hostname],
-	ds.host_process_id AS [HostPID],
+	dc.[client_net_address] AS [HostIP],
+	sp.[hostprocess] AS [HostPID],
 	RTRIM(sp.[program_name]) AS [ProgramName],
 	sp.[cmd] AS [Command],
 	RTRIM(sp.[lastwaittype]) AS [LastWaitType],
@@ -12,17 +13,19 @@ SELECT DISTINCT
 	sp.[cpu] AS [CPUTime],
 	sp.[memusage] AS [Memory],
 	sp.[physical_io] AS [DiskIO],
+	dc.[auth_scheme] AS [AuthType],
 	sp.[last_batch] AS [LastBatch],
 	sp.[login_time] AS [LoginTime],
 	'kill ' + CAST(sp.[spid] AS VARCHAR(10)) AS [KillCommand]
 FROM [master].[dbo].[sysprocesses] sp
 	JOIN [master].[dbo].[sysdatabases] sd ON sp.[dbid] = sd.[dbid]
-	JOIN [master].[sys].[dm_exec_sessions] ds ON sp.[spid] = ds.[session_id]
+	JOIN [master].[sys].[dm_exec_connections] dc ON sp.[spid] = dc.[session_id]
+--	JOIN [master].[sys].[dm_exec_sessions] ds ON sp.[spid] = ds.[session_id]
 WHERE sd.[name] NOT IN ('master', 'model', 'msdb')
 --	AND sd.[name] = 'db_name'
 --	AND RTRIM([hostname]) LIKE 'hostname1%'
 --	AND RTRIM([loginame]) LIKE 'username1%'
-ORDER BY [spid]
+ORDER BY sp.[spid]
 
 
 /*** Automatically Kill Sessions with Cursor (Carefully Specify Where Condition) ***
