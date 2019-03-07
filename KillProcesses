@@ -1,24 +1,26 @@
-SELECT
-	[spid],
+SELECT DISTINCT
+	sp.[spid],
 	RTRIM(sp.[status]) AS [Status],
-	RTRIM([loginame]) AS [Login],
-	RTRIM([hostname]) AS [Hostname], 
-	[blocked] AS [Blocker],
-	sd.[name] AS [DBName], 
-	[cmd] AS [Command],
-	[cpu] AS [CPUTime],
-	[memusage] AS [Memory],
-	[physical_io] AS [DiskIO],
-	RTRIM([lastwaittype]) AS [LastWaitType],
-	RTRIM([program_name]) AS [ProgramName],
-	[last_batch] AS [LastBatch],
-	[login_time] AS [LoginTime],
-	'kill ' + CAST([spid] AS VARCHAR(10)) AS [KillCommand]
-FROM [master].[dbo].[sysprocesses] sp 
-JOIN [master].[dbo].[sysdatabases] sd ON sp.[dbid] = sd.[dbid]
-WHERE sd.[name] NOT IN ('master', 'model', 'msdb') 
---	AND sd.[name] = 'db_name' 
---	AND RTRIM([hostname]) LIKE 'hostname1%' 
+	RTRIM(sp.[loginame]) AS [Login],
+	sd.[name] AS [DBName],
+	RTRIM(sp.[hostname]) AS [Hostname],
+	ds.host_process_id AS [HostPID],
+	RTRIM(sp.[program_name]) AS [ProgramName],
+	sp.[cmd] AS [Command],
+	RTRIM(sp.[lastwaittype]) AS [LastWaitType],
+	sp.[blocked] AS [Blocker],
+	sp.[cpu] AS [CPUTime],
+	sp.[memusage] AS [Memory],
+	sp.[physical_io] AS [DiskIO],
+	sp.[last_batch] AS [LastBatch],
+	sp.[login_time] AS [LoginTime],
+	'kill ' + CAST(sp.[spid] AS VARCHAR(10)) AS [KillCommand]
+FROM [master].[dbo].[sysprocesses] sp
+	JOIN [master].[dbo].[sysdatabases] sd ON sp.[dbid] = sd.[dbid]
+	JOIN [master].[sys].[dm_exec_sessions] ds ON sp.[spid] = ds.[session_id]
+WHERE sd.[name] NOT IN ('master', 'model', 'msdb')
+--	AND sd.[name] = 'db_name'
+--	AND RTRIM([hostname]) LIKE 'hostname1%'
 --	AND RTRIM([loginame]) LIKE 'username1%'
 ORDER BY [spid]
 
