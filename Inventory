@@ -1,10 +1,7 @@
 --SQL Server Inventory
-
-
-DECLARE @rootDir NVARCHAR(512), @CLR VARCHAR(15), @MinMemory SQL_VARIANT, @MaxMemory SQL_VARIANT, @verIndex INT, @SSacc NVARCHAR(50), @SSAacc NVARCHAR(50), @BinnDir NVARCHAR(150), @InstantFileInit VARCHAR(10)
+DECLARE @rootDir NVARCHAR(512), @CLR VARCHAR(15), @MinMemory SQL_VARIANT, @MaxMemory SQL_VARIANT, @verIndex INT, @SSacc NVARCHAR(50), @SSAacc NVARCHAR(50), @Listeners NVARCHAR(MAX), @BinnDir NVARCHAR(150), @InstantFileInit VARCHAR(10)
 DECLARE @MemColName VARCHAR(25), @MemCommand NVARCHAR(1000), @MemSize BIGINT, @SystemManufacturer VARCHAR(128), @BIOSVendor VARCHAR(128), @BIOSVersion VARCHAR(128), @BIOSReleaseDate VARCHAR(128), @ProcessorNameString VARCHAR(128), @ProductName VARCHAR(128), @WVersion VARCHAR(128), @CurrentVersion VARCHAR(128), @CurrentBuild VARCHAR(128), @CSDVersion VARCHAR(128), @Domain VARCHAR(100)
-DECLARE @hostNameTable TABLE ([HostName] SQL_VARIANT)
-
+DECLARE @hostNameTable TABLE ([ServerName] SQL_VARIANT)
 
 /*** Host Name ***/
 IF (SELECT SERVERPROPERTY('IsClustered')) = 1
@@ -12,7 +9,7 @@ IF (SELECT SERVERPROPERTY('IsClustered')) = 1
 ELSE
 	INSERT INTO @hostNameTable SELECT SERVERPROPERTY('ComputerNamePhysicalNetBIOS')
 /*** CLR Version ***/
-SELECT @CLR = CAST(SERVERPROPERTY('BuildClrVersion') AS VARCHAR)
+--SELECT @CLR = CAST(SERVERPROPERTY('BuildClrVersion') AS VARCHAR)
 /*** Product Trim ***/
 IF (SELECT CHARINDEX (' -',@@VERSION,1)-1) < (SELECT CHARINDEX (' (',@@VERSION,1)-1)
 	SELECT @verIndex = CHARINDEX (' -',@@VERSION,1)-1
@@ -33,7 +30,7 @@ EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\MSSQLServer
 IF (SELECT CAST(LEFT(CAST(SERVERPROPERTY('ProductVersion') AS VARCHAR),4) AS FLOAT)) <> 10.0 
 BEGIN
 	SELECT @SSacc = service_account,
-	@BinnDir = SUBSTRING(filename,2,CHARINDEX('sqlservr.exe',filename)-2)
+		@BinnDir = SUBSTRING(filename,2,CHARINDEX('sqlservr.exe',filename)-2)
 	FROM sys.dm_server_services
 	WHERE servicename LIKE 'SQL Server (%'
 	SELECT @SSAacc = service_account
@@ -46,6 +43,20 @@ BEGIN
 	SET @SSAacc = NULL
 	SET @BinnDir = NULL
 END
+/*** AlwaysOn Listener Informations ***/
+IF (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1
+BEGIN
+	SELECT @Listeners = STUFF((
+		SELECT DISTINCT N', ' + AGL.[dns_name] + ' (' + AGI.[ip_address] + ',' + CAST(AGL.[port] AS varchar(5)) + ')'
+		FROM sys.availability_groups_cluster AS AGC
+			INNER JOIN [master].[sys].[dm_hadr_availability_replica_cluster_states] AS RCS ON RCS.[group_id] = AGC.[group_id]
+			INNER JOIN [master].[sys].[dm_hadr_availability_replica_states] AS ARS ON ARS.[replica_id] = RCS.[replica_id]
+			INNER JOIN [master].[sys].[availability_group_listeners] AS AGL ON AGL.[group_id] = ARS.[group_id]
+			INNER JOIN [master].[sys].[availability_group_listener_ip_addresses] AS AGI ON AGI.[listener_id] = AGL.[listener_id]
+	FOR XML PATH(''), TYPE)
+	.value(N'.[1]', N'NVARCHAR(MAX)'), 1, 2, N'')
+END
+ELSE SELECT @Listeners = NULL
 /*** Machine Informations ***/
 EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\BIOS', N'SystemManufacturer', @SystemManufacturer OUTPUT;
 EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'HARDWARE\DESCRIPTION\System\BIOS', N'BIOSVendor', @BIOSVendor OUTPUT;
@@ -58,51 +69,51 @@ SELECT @WVersion = @CurrentVersion + '.' + @CurrentBuild
 EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SOFTWARE\Microsoft\Windows NT\CurrentVersion', N'CSDVersion', @CSDVersion OUTPUT;
 EXEC xp_instance_regread N'HKEY_LOCAL_MACHINE', N'SYSTEM\ControlSet001\Services\Tcpip\Parameters\', N'Domain', @Domain OUTPUT;
 
-
 /*** Instance Informations ***/
 SELECT 
-SERVERPROPERTY('ServerName') AS 'InstanceName',
-exc.local_net_address AS 'Instance_IP', 
-exc.local_tcp_port AS 'Port',
-hn.[HostName],
+SERVERPROPERTY('ServerName') AS [InstanceName],
+exc.local_net_address AS [InstanceIP], 
+exc.local_tcp_port AS [Port],
+hn.[ServerName],
 	CASE   
 		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsClustered'),0)) = 0 THEN exc.local_net_address 
 		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN NULL 
 	END
-	AS [Host_IP],
+	AS [ServerIP],
 	CASE   
-		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsClustered'),0)) = 0 OR
-			 (SELECT SERVERPROPERTY('IsHadrEnabled')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsHadrEnabled'),0)) = 0 THEN 'Stand-Alone'  
-		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN 'Cluster'   
-		WHEN (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 THEN 'AlwaysOn'
-		WHEN (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 AND (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN 'Cluster&AlwaysOn'  
+		WHEN ((SELECT SERVERPROPERTY('IsClustered')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsClustered'),0)) = 0) AND
+			 ((SELECT SERVERPROPERTY('IsHadrEnabled')) = 0 OR (SELECT ISNULL(SERVERPROPERTY('IsHadrEnabled'),0)) = 0) THEN N'Stand-Alone'  
+		WHEN (SELECT SERVERPROPERTY('IsClustered')) = 1 THEN N'Clustered'   
+		WHEN (SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 THEN N'AlwaysOn'
+		WHEN ((SELECT SERVERPROPERTY('IsHadrEnabled')) = 1 AND (SELECT SERVERPROPERTY('IsClustered')) = 1) THEN N'ClusteredAlwaysOn'  
 	END 
-	AS 'HighAvailability',
-SERVERPROPERTY('Collation') AS Collation,
-LEFT ( @@VERSION , @verIndex) AS 'Product',
-SERVERPROPERTY('ProductVersion') AS 'ProductVersion',
-SERVERPROPERTY('ProductLevel') AS 'SP_Level',
-ISNULL(SERVERPROPERTY('ProductUpdateLevel'),0) AS 'CU_Level',
-SUBSTRING(@CLR,2,LEN(@CLR)) AS CLR_Version,
-SERVERPROPERTY('Edition') AS Edition,
-@SystemManufacturer AS SystemManufacturer,
-osinf.cpu_count AS 'CPU', 
-@MemSize/1024 AS Memory,
-@MinMemory AS 'MinMemory(MB)', 
-@MaxMemory AS 'MaxMemory(MB)',
-@SSacc AS 'SQL_Server_Account', 
-@SSAacc AS 'SQL_Server_Agent_Account', 
-@BinnDir AS 'Instance_Binn_Directory',
-@rootDir AS 'Instance_Root_Directory',
-SERVERPROPERTY('InstanceDefaultDataPath') AS 'Instance_Data_Directory',
-SERVERPROPERTY('InstanceDefaultLogPath') AS 'Instance_Log_Directory',
-@ProductName AS OperatingSystem, 
-@WVersion AS WindowsVersion, 
-@CSDVersion AS Windows_SP_Level,
-@ProcessorNameString AS ProcessorModel,
-@BIOSVendor AS BIOS_Vendor,
-@BIOSVersion AS BIOS_Version,
-@Domain AS Domain
+	AS [HighAvailability],
+SERVERPROPERTY('Collation') AS [Collation],
+LEFT (@@VERSION, @verIndex) AS [Product],
+SERVERPROPERTY('ProductVersion') AS [ProductVersion],
+SERVERPROPERTY('ProductLevel') AS [SP_Level],
+ISNULL(SERVERPROPERTY('ProductUpdateLevel'),0) AS [CU_Level],
+--SUBSTRING(@CLR,2,LEN(@CLR)) AS [CLR_Version],
+SERVERPROPERTY('Edition') AS [Edition],
+@SystemManufacturer AS [SystemManufacturer],
+osinf.cpu_count AS [CPU], 
+@MemSize/1024 AS [Memory],
+@MinMemory AS [MinMemory(MB)], 
+@MaxMemory AS [MaxMemory(MB)],
+@Listeners AS [AlwaysOnListeners],
+@SSacc AS [SQLServerAccount], 
+@SSAacc AS [SQLServerAgentAccount], 
+--@BinnDir AS [InstanceBinnDirectory],
+@rootDir AS [InstanceRootDirectory],
+SERVERPROPERTY('InstanceDefaultDataPath') AS [InstanceDataDirectory],
+SERVERPROPERTY('InstanceDefaultLogPath') AS [InstanceLogDirectory],
+@ProductName AS [OperatingSystem], 
+@WVersion AS [WindowsVersion], 
+@CSDVersion AS [Windows_SP_Level],
+@ProcessorNameString AS [ProcessorModel],
+@BIOSVendor AS [BIOS_Vendor],
+@BIOSVersion AS [BIOS_Version],
+@Domain AS [Domain]
 FROM @hostNameTable hn, sys.dm_exec_connections exc, sys.dm_os_sys_info osinf
-WHERE  exc.session_id = @@SPID
-ORDER BY hn.[HostName]
+WHERE exc.session_id = @@SPID
+ORDER BY hn.[ServerName]
