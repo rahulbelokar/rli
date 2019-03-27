@@ -1,6 +1,6 @@
 --Replace login_name with Control+H
 
-ALTER AUTHORIZATION ON ENDPOINT::Hadr_endpoint TO akbsqlsa
+ALTER AUTHORIZATION ON ENDPOINT::Hadr_endpoint TO sa
 GO
 
 DECLARE @svcaccount nvarchar(50), @sqlcommand nvarchar(500)
@@ -15,7 +15,7 @@ GO
 DECLARE @sqlcommand NVARCHAR(500)
 DECLARE crsr CURSOR FOR
 ----------------------------------
-SELECT 'ALTER AUTHORIZATION ON AVAILABILITY GROUP::[' + name + '] TO akbsqlsa;' FROM sys.availability_groups 
+SELECT 'ALTER AUTHORIZATION ON AVAILABILITY GROUP::[' + name + '] TO sa;' FROM sys.availability_groups 
 ----------------------------------
 OPEN crsr
 FETCH NEXT FROM crsr INTO @sqlcommand
@@ -58,7 +58,7 @@ EXEC sp_msforeachdb '
 IF ''?'' NOT IN (''master'',''model'',''msdb'',''tempdb'')
 BEGIN
 USE [?]
-EXEC dbo.sp_changedbowner @loginame = N''akbsqlsa''
+EXEC dbo.sp_changedbowner @loginame = N''sa''
 END
 '
 */
