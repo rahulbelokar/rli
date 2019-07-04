@@ -1,0 +1,11595 @@
+--log space
+sp_msforeachdb 'use ? SELECT
+Name,fileid, Filename,
+CONVERT(Decimal(15,2),ROUND(a.Size/128.000,2)) [Currently Allocated Space (MB)],
+CONVERT(Decimal(15,2),ROUND(FILEPROPERTY(a.Name,''SpaceUsed'')/128.000,2)) AS [Space Used (MB)],
+CONVERT(Decimal(15,2),ROUND((a.Size-FILEPROPERTY(a.Name,''SpaceUsed''))/128.000,2)) AS [Available Space (MB)]
+FROM dbo.sysfiles a (NOLOCK)'
+
+USE [master]
+GO
+
+/****** Object: StoredProcedure [dbo].[Alerts_Blocking] Script Date: 09/14/2018 11:25:51 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+--select * from msdb..sysmail_profile 
+
+CREATE procedure [dbo].[Alerts_Blocking] 
+
+as 
+
+DECLARE @tableHTML NVARCHAR(MAX) 
+
+if( 
+
+SELECT COUNT(1)FROM sys.dm_exec_requests blocked_query 
+
+JOIN sys.dm_exec_requests blocking_query ON blocked_query.blocking_session_id = blocking_query.session_id 
+
+CROSS APPLY 
+
+( 
+
+SELECT *FROM sys.dm_exec_sql_text(blocking_query.sql_handle) 
+
+) sql_text 
+
+JOIN sys.dm_os_waiting_tasks waits ON 
+
+waits.session_id = blocking_query.session_id where DATEDIFF(n,blocked_query.start_time,getdate())>2)>=1 
+
+begin 
+
+print 'CPU Alert Condition True, Sending Email..' 
+
+SET @tableHTML = 
+
+N'<H1 bgcolor="Yellow">Blocking Query Details</H1>' + 
+
+N'<H2 bgcolor="Yellow">Query Details</H2>' + 
+
+N'<table border="1">' + 
+
+N'<tr bgcolor="Yellow"><th>Database_Name</th><th>blocked_session_id</th><th>blocking_session_id</th><th>blocked_Query</th><th>blocking_Query</th><th>WaitType</th><th>Blocked_StartTime</th>'+ 
+
+CAST (( 
+
+SELECT 
+
+td=DB_NAME(blocked_query.database_id),'', 
+
+td=blocked_query.session_id,'', 
+
+td=blocking_query.session_id,'', 
+
+td=sql_text.text,'', 
+
+td=sql_text2.text,'', 
+
+td=waits.wait_type,'', 
+
+td=blocked_query.start_time,'' 
+
+FROM sys.dm_exec_requests blocked_query 
+
+JOIN sys.dm_exec_requests blocking_query ON 
+
+blocked_query.blocking_session_id = blocking_query.session_id 
+
+CROSS APPLY sys.dm_exec_sql_text(blocked_query.sql_handle) AS sql_text 
+
+CROSS APPLY sys.dm_exec_sql_text(blocking_query.sql_handle) AS sql_text2 
+
+JOIN sys.dm_os_waiting_tasks waits ON 
+
+waits.session_id = blocking_query.session_id where DATEDIFF(n,blocked_query.start_time,getdate())>2 
+
+FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>' 
+
+-- Change SQL Server Email notification code here 
+
+EXEC msdb.dbo.sp_send_dbmail 
+
+@recipients='aaa@bajajallianz.co.in', 
+
+--@copy_recipients='siddharth.barnwal@cloverinfotech.com', 
+
+@profile_name = 'SQLDBA', 
+
+@subject = 'Alert for Blocking Queries on 10.2.101.21 Server', 
+
+@body = @tableHTML,@body_format = 'HTML'; 
+
+end
+
+
+GO
+
+
+
+F--Log Size
+
+if(select count from sys.databases where state_desc='Online')>0
+Begin
+
+DECLARE @table NVARCHAR(MAX) ;
+Declare @subject varchar(max);
+set @subject='Database Log Size Report on Server 10.4.6.23 -' +@@servername
+
+SET @table =
+N'<H2><center>Databases Log Size Report</center></H2>' +
+N'<center><table border="1" cellpadding=2>' +
+N'<tr bgcolor="#8181F7"><th>Database Name</th><th>Log Size</th></tr>' +
+CAST ( ( Select td=b.name, '',td=(a.size*8)/(1024*1024) from sys.sysaltfiles a,sys.sysdatabases b where a.dbid = b.dbid and
+a.filename like '%.ldf'and (a.size*8)/(1024*1024)>0.9
+FOR XML PATH('tr'), TYPE
+) AS NVARCHAR(MAX) ) +
+N'</table>' ;
+--
+EXEC msdb.dbo.sp_send_dbmail @profile_name='sqldba', --Change to your Profile Name
+@recipients = 'dba.life@bajajallianz.co.in',
+@copy_recipients='Sid@cloverinfotech.com',--Put the email address of those who want to receive the e-mail
+@subject = @subject,
+@body = @table,
+@body_format = 'HTML' ;
+
+END
+
+
+--Alerts_Long_Runquery
+
+
+
+USE [master]
+GO
+
+/****** Object: StoredProcedure [dbo].[Alerts_Long_Runquery] Script Date: 09/03/2018 17:06:54 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE procedure [dbo].[Alerts_Long_Runquery] 
+as 
+DECLARE @tableHTML NVARCHAR(MAX) 
+if( 
+SELECT count(req.session_id) 
+FROM sys.dm_exec_requests req 
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext 
+where req.status in ('RUNNING','SUSPENDED','RUNNABLE') and req.command<>'BACKUP DATABASE' 
+AND ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1)>=1 
+begin 
+print 'CPU Alert Condition True, Sending Email..' 
+SET @tableHTML = 
+N'<H1 bgcolor="green">Long Running Query</H1>' + 
+N'<H2 bgcolor="green">Query Details</H2>' + 
+N'<table border="1">' + 
+N'<tr bgcolor="green"><th>Query</th><th>Session_Id</th><th>Status</th><th>Command</th><th>Database</th><th>Start-Time</th>'+ 
+CAST (( 
+SELECT 
+td=sqltext.TEXT,'', 
+td=req.session_id,'', 
+td=req.status,'', 
+td=req.command,'', 
+td=Db_name(req.database_ID),'', 
+td=req.start_time,'' 
+FROM sys.dm_exec_requests req 
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext 
+where ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1 
+AND status in ('RUNNING','SUSPENDED','RUNNABLE') and req.command<>'BACKUP DATABASE' 
+FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>' 
+-- Change SQL Server Email notification code here 
+EXEC msdb.dbo.sp_send_dbmail 
+@recipients = 'd@bajajallianz.co.in',
+--@copy_recipients='siddharth.barnwal@cloverinfotech.com', 
+@profile_name = 'SQLDBA', 
+@subject = 'Long Running Query on 10.4.6.23 server', 
+@body = @tableHTML,@body_format = 'HTML'; 
+end 
+
+
+
+
+
+GO
+
+--Monitoring script
+
+
+USE [msdb]
+GO
+
+/****** Object: Job [Clo_DB_Offline Status] Script Date: 09/03/2018 17:04:02 ******/
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object: JobCategory [[Uncategorized (Local)]]] Script Date: 09/03/2018 17:04:02 ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'[Uncategorized (Local)]' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'[Uncategorized (Local)]'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode = msdb.dbo.sp_add_job @job_name=N'Clo_DB_Offline Status', 
+@enabled=1, 
+@notify_level_eventlog=0, 
+@notify_level_email=0, 
+@notify_level_netsend=0, 
+@notify_level_page=0, 
+@delete_level=0, 
+@description=N'No description available.', 
+@category_name=N'[Uncategorized (Local)]', 
+@owner_login_name=N'sa', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object: Step [DB Status] Script Date: 09/03/2018 17:04:02 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'DB Status', 
+@step_id=1, 
+@cmdexec_success_code=0, 
+@on_success_action=1, 
+@on_success_step_id=0, 
+@on_fail_action=2, 
+@on_fail_step_id=0, 
+@retry_attempts=0, 
+@retry_interval=0, 
+@os_run_priority=0, @subsystem=N'TSQL', 
+@command=N'if(select count from sys.databases where state_desc<>''Online'')>0
+Begin
+
+DECLARE @table NVARCHAR(MAX) ;
+Declare @subject varchar(max);
+set @subject=''Offline Databases Report on Server 10.4.6.23 -'' +@@servername
+
+SET @table =
+N''<H1>Offline Databases Report</H1>'' +
+N''<table border="1">'' +
+N''<tr><th>Database Name</th><th>Database Status</th></tr>'' +
+CAST ( ( Select td=name, '''',td=state_desc from sys.databases where state_desc<>''Online''
+FOR XML PATH(''tr''), TYPE
+) AS NVARCHAR(MAX) ) +
+N''</table>'' ;
+--
+EXEC msdb.dbo.sp_send_dbmail @profile_name=''sqldba'', --Change to your Profile Name
+@recipients = ''dba.life@bajajallianz.co.in'',
+@copy_recipients=''@cloverinfotech.com'',--Put the email address of those who want to receive the e-mail
+@subject = @subject,
+@body = @table,
+@body_format = ''HTML'' ;
+
+END', 
+@database_name=N'master', 
+@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'DB Statu', 
+@enabled=1, 
+@freq_type=4, 
+@freq_interval=1, 
+@freq_subday_type=4, 
+@freq_subday_interval=15, 
+@freq_relative_interval=0, 
+@freq_recurrence_factor=0, 
+@active_start_date=20171104, 
+@active_end_date=99991231, 
+@active_start_time=0, 
+@active_end_time=235959, 
+@schedule_uid=N'8343974b-2c3e-43fb-b192-6aa78afd71e8'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO
+--Monitoring script
+
+USE [master]
+GO
+
+/****** Object: StoredProcedure [dbo].[Daily_Server_Health_Checkup] Script Date: 09/03/2018 11:52:19 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+--select * from sys.sysobjects where name like '%profile%' and xtype='U' 
+--select * from msdb..sysmail_mailitems order by send_request_date desc 
+--select * from msdb..sysmail_profile 
+
+CREATE PROCEDURE [dbo].[Daily_Server_Health_Checkup] 
+
+AS 
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED 
+SET NOCOUNT ON 
+SET ANSI_WARNINGS ON 
+SET ANSI_WARNINGS ON 
+SET ARITHABORT OFF 
+SET ARITHIGNORE ON 
+
+
+DECLARE @vRecipients AS VARCHAR (MAX) 
+DECLARE @vCopy_Recipients AS VARCHAR (MAX) 
+DECLARE @vUnused_Index_Uptime_Threshold AS INT 
+DECLARE @vOnline_Since AS NVARCHAR (19) 
+DECLARE @vUptime_Days AS INT 
+DECLARE @vDate_24_Hours_Ago AS DATETIME 
+DECLARE @vDate_Now AS DATETIME 
+DECLARE @vSubject AS NVARCHAR (255) 
+DECLARE @vFixed_Drives_Free_Space_Table AS TABLE (drive VARCHAR (5),TotalSize int, FreeSpace INT,Percentage int) 
+DECLARE @vDatabase_Name AS NVARCHAR (500) 
+DECLARE @vXML_String AS NVARCHAR (MAX) 
+DECLARE @vBody AS NVARCHAR (MAX) 
+DECLARE @vSQL_String AS NVARCHAR (MAX) 
+declare @VFullSub as nvarchar(max) 
+declare @Vdate as nvarchar(max) 
+
+DECLARE @hr int 
+DECLARE @fso int 
+DECLARE @drive char(1) 
+DECLARE @odrive int 
+DECLARE @TotalSize varchar(20) 
+DECLARE @MB bigint ; SET @MB = 1048576 
+CREATE TABLE #drives (ServerName varchar(50), 
+drive char(1) PRIMARY KEY, 
+FreeSpace int NULL, 
+TotalSize int NULL, 
+FreespaceTimestamp DATETIME NULL) 
+INSERT #drives(drive,FreeSpace) 
+EXEC master.dbo.xp_fixeddrives 
+EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@fso OUT 
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso 
+DECLARE dcur CURSOR LOCAL FAST_FORWARD 
+FOR SELECT drive from #drives 
+ORDER by drive 
+OPEN dcur 
+FETCH NEXT FROM dcur INTO @drive 
+WHILE @@FETCH_STATUS=0 
+BEGIN 
+EXEC @hr = sp_OAMethod @fso,'GetDrive', @odrive OUT, @drive 
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso 
+EXEC @hr = sp_OAGetProperty @odrive,'TotalSize', @TotalSize OUT 
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @odrive 
+UPDATE #drives 
+SET TotalSize=@TotalSize/@MB 
+--, ServerName = @@servername, FreespaceTimestamp = (GETDATE()) 
+WHERE drive=@drive 
+FETCH NEXT FROM dcur INTO @drive 
+END 
+CLOSE dcur 
+DEALLOCATE dcur 
+EXEC @hr=sp_OADestroy @fso 
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso 
+--insert into dbo.Disk_space_detail 
+insert into @vFixed_Drives_Free_Space_Table(drive,TotalSize,FreeSpace,Percentage) 
+SELECT --ServerName, 
+drive, 
+TotalSize as 'Total(MB)', 
+FreeSpace as 'Free(MB)', 
+CAST((FreeSpace/(TotalSize*1.0))*100.0 as int) as 'Free' 
+--, FreespaceTimestamp 
+FROM #drives 
+ORDER BY drive 
+DROP TABLE #drives 
+
+
+SET @vRecipients = 'rahul.belokar@cloverinfotech.com'--"Rahul Belokar" <rahul.belokar@cloverinfotech.com>
+--SET @vCopy_Recipients ='siddharth.barnwal@cloverinfotech.com'
+--SET @vRecipients ='cloversqlconnect@cloverinfotech.com'
+SET @vUnused_Index_Uptime_Threshold = 7 
+
+SELECT 
+@vOnline_Since = CONVERT (NVARCHAR (19), DB.create_date, 120) 
+,@vUptime_Days = DATEDIFF (DAY, DB.create_date, GETDATE ()) 
+FROM 
+[master].[sys].[databases] DB 
+WHERE 
+DB.name = 'tempdb' 
+
+
+SET @vDate_24_Hours_Ago = GETDATE ()-1 
+SET @vDate_Now = @vDate_24_Hours_Ago+1 
+SET @vSubject = 'SQL Daily Monitoring: C1SRW2WDB01 : 10.2.101.21:' 
+set @Vdate= convert(varchar(max),GETDATE(),106)
+set @VFullSub= @vSubject+' '+@vdate
+SET @vXML_String = '' 
+SET @vBody = '' 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Error Trapping: Check If Temp Table(s) Already Exist(s) And Drop If Applicable 
+---------------------------------------------------------------------------------------------------------------------- 
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_instance_property_temp 
+
+END 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp 
+
+END 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp 
+
+END 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp 
+
+END 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp 
+
+END 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query I: Server Instance Property Information 
+---------------------------------------------------------------------------------------------------------------------- 
+
+
+SELECT 
+SERVERPROPERTY ('ComputerNamePhysicalNetBIOS') AS netbios_name 
+,@@SERVERNAME AS server_name 
+,REPLACE (CONVERT (NVARCHAR (500), SERVERPROPERTY ('Edition')),' Edition','') AS edition 
+,SERVERPROPERTY ('ProductVersion') AS version 
+,SERVERPROPERTY ('ProductLevel') AS [level] 
+,@vOnline_Since AS online_since 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, @vUptime_Days), 1)), 4, 20)) AS uptime_days 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, @@TOTAL_READ), 1)), 4, 20)) AS reads 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, @@TOTAL_WRITE), 1)), 4, 20)) AS writes 
+--,@AVGCPU as AverageCPU 
+INTO 
+dbo.#ssaj_sssr_instance_property_temp 
+
+
+IF @@ROWCOUNT = 0 
+BEGIN 
+
+GOTO skip_instance_property 
+
+END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',X.netbios_name AS 'td' 
+,'',X.server_name AS 'td' 
+,'',X.edition AS 'td' 
+,'',X.version AS 'td' 
+,'',X.level AS 'td' 
+,'',X.online_since AS 'td' 
+,'','right_align'+X.uptime_days AS 'td' 
+,'','right_align'+X.reads AS 'td' 
+,'','right_align'+X.writes AS 'td' 
+--,'',@AVGCPU AS 'td' 
+FROM 
+dbo.#ssaj_sssr_instance_property_temp X 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = 
+
+' 
+<h3><center>Server Instance Property Information</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>NetBIOS Name</th> 
+<th>Server Name</th> 
+<th>Edition</th> 
+<th>Version</th> 
+<th>Level</th> 
+<th>Online Since</th> 
+<th>Uptime Days</th> 
+<th>Reads</th> 
+<th>Writes</th> 
+
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_instance_property: 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_instance_property_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query II: Fixed Drives Free Space 
+---------------------------------------------------------------------------------------------------------------------- 
+
+--INSERT INTO @vFixed_Drives_Free_Space_Table 
+
+-- ( 
+-- drive 
+-- ,free_space_mb 
+
+-- ) 
+
+--EXEC master.dbo.xp_fixeddrives 
+
+
+--IF @@ROWCOUNT = 0 
+--BEGIN 
+
+-- GOTO skip_fixed_drives_free_space 
+
+--END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',X.drive+':' AS 'td' 
+,'',X.Totalsize AS 'td' 
+,'',X.FreeSpace AS 'td' 
+,'',X.Percentage AS 'td' 
+--,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, X.free_space_mb), 1)), 4, 20)) AS 'td' 
+--,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, X.free_space_mb), 1)), 4, 20)) AS 'td' 
+--,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, X.free_space_mb), 1)), 4, 20)) AS 'td' 
+FROM 
+@vFixed_Drives_Free_Space_Table X 
+ORDER BY 
+X.drive 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = @vBody+ 
+
+' 
+<br><br> 
+<h3><center>Fixed Drives Free Space</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>Drive</th> 
+<th>Total Size (MB)</th> 
+<th>Free Space(MB)</th> 
+<th>%Free Space</th> 
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_fixed_drives_free_space: 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query III: Database Size (Summary) / Distribution Stats 
+---------------------------------------------------------------------------------------------------------------------- 
+
+CREATE TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp 
+
+( 
+database_name NVARCHAR (500) 
+,total_size_mb NVARCHAR (20) 
+,unallocated_mb NVARCHAR (20) 
+,reserved_mb NVARCHAR (20) 
+,data_mb NVARCHAR (20) 
+,index_mb NVARCHAR (20) 
+,unused_mb NVARCHAR (20) 
+) 
+
+
+SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name) 
+
+
+WHILE @vDatabase_Name IS NOT NULL 
+BEGIN 
+
+SET @vSQL_String = 
+
+' 
+USE ['+@vDatabase_Name+']; 
+
+
+INSERT INTO dbo.#ssaj_sssr_database_size_distribution_stats_temp 
+
+SELECT 
+DB_NAME () AS database_name 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((A.total_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS total_size_mb 
+,(CASE 
+WHEN A.database_size >= B.total_pages THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND (((A.database_size-B.total_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) 
+ELSE ''0'' 
+END) AS unallocated_mb 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((B.total_pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS reserved_mb 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((B.pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS data_mb 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND (((B.used_pages-B.pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS index_mb 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND (((B.total_pages-B.used_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS unused_mb 
+FROM 
+
+( 
+SELECT 
+SUM (CASE 
+WHEN DBF.type = 0 THEN DBF.size 
+ELSE 0 
+END) AS database_size 
+,SUM (DBF.size) AS total_size 
+FROM 
+[sys].[database_files] AS DBF 
+WHERE 
+DBF.type IN (0,1) 
+) A 
+
+CROSS JOIN 
+
+( 
+SELECT 
+SUM (AU.total_pages) AS total_pages 
+,SUM (AU.used_pages) AS used_pages 
+,SUM (CASE 
+WHEN IT.internal_type IN (202,204) THEN 0 
+WHEN AU.type <> 1 THEN AU.used_pages 
+WHEN P.index_id <= 1 THEN AU.data_pages 
+ELSE 0 
+END) AS pages 
+FROM 
+[sys].[partitions] P 
+INNER JOIN [sys].[allocation_units] AU ON AU.container_id = P.partition_id 
+LEFT JOIN [sys].[internal_tables] IT ON IT.[object_id] = P.[object_id] 
+) B 
+' 
+
+
+EXEC (@vSQL_String) 
+
+
+SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name) 
+
+END 
+
+
+IF (SELECT COUNT  FROM dbo.#ssaj_sssr_database_size_distribution_stats_temp) = 0 
+BEGIN 
+
+GOTO skip_database_size_distribution_stats 
+
+END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',X.database_name AS 'td' 
+,'','right_align'+X.total_size_mb AS 'td' 
+,'','right_align'+X.unallocated_mb AS 'td' 
+,'','right_align'+X.reserved_mb AS 'td' 
+,'','right_align'+X.data_mb AS 'td' 
+,'','right_align'+X.index_mb AS 'td' 
+,'','right_align'+X.unused_mb AS 'td' 
+FROM 
+dbo.#ssaj_sssr_database_size_distribution_stats_temp X 
+ORDER BY 
+X.database_name 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = @vBody+ 
+
+' 
+<br><br> 
+<h3><center>Database Size (Summary) / Distribution Stats</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>Database Name</th> 
+<th>Total Size (MB)</th> 
+<th>Unallocated (MB)</th> 
+<th>Reserved (MB)</th> 
+<th>Data (MB)</th> 
+<th>Index (MB)</th> 
+<th>Unused (MB)</th> 
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_database_size_distribution_stats: 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query IV: Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats 
+---------------------------------------------------------------------------------------------------------------------- 
+
+SELECT 
+DB_NAME (MF.database_id) AS database_name 
+,DB.recovery_model_desc 
+,DB.compatibility_level 
+,CONVERT (NVARCHAR (10), LEFT (UPPER (MF.type_desc),1)+LOWER (SUBSTRING (MF.type_desc, 2, 250))) AS file_type 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((MF.size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20)) AS file_size_mb 
+,RIGHT ((CASE 
+WHEN MF.growth = 0 THEN 'Fixed Size' 
+WHEN MF.max_size = -1 THEN 'Unrestricted' 
+WHEN MF.max_size = 0 THEN 'None' 
+WHEN MF.max_size = 268435456 THEN '2 TB' 
+ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((MF.max_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20))+' MB' 
+END),20) AS max_size 
+,RIGHT ((CASE 
+WHEN MF.growth = 0 THEN 'N/A' 
+WHEN MF.is_percent_growth = 1 THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, MF.growth), 1)), 4, 20))+' %' 
+ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND ((MF.growth*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 20))+' MB' 
+END),20) AS growth_increment 
+,ROW_NUMBER () OVER 
+( 
+PARTITION BY 
+MF.database_id 
+ORDER BY 
+MF.type 
+,MF.[file_id] 
+) AS database_filter_id 
+INTO 
+dbo.#ssaj_sssr_model_compatibility_size_growth_temp 
+FROM 
+[master].[sys].[master_files] MF 
+INNER JOIN [master].[sys].[databases] DB ON DB.database_id = MF.database_id 
+
+
+IF @@ROWCOUNT = 0 
+BEGIN 
+
+GOTO skip_model_compatibility_size_growth 
+
+END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',(CASE 
+WHEN X.database_filter_id = 1 THEN X.database_name 
+ELSE '' 
+END) AS 'td' 
+,'',(CASE 
+WHEN X.database_filter_id = 1 THEN X.recovery_model_desc 
+ELSE '' 
+END) AS 'td' 
+,'',(CASE 
+WHEN X.database_filter_id = 1 THEN ISNULL (CONVERT (VARCHAR (5), X.compatibility_level),'N/A') 
+ELSE '' 
+END) AS 'td' 
+,'',X.file_type AS 'td' 
+,'','right_align'+X.file_size_mb AS 'td' 
+,'','right_align'+X.max_size AS 'td' 
+,'','right_align'+X.growth_increment AS 'td' 
+FROM 
+dbo.#ssaj_sssr_model_compatibility_size_growth_temp X 
+ORDER BY 
+X.database_name 
+,X.database_filter_id 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = @vBody+ 
+
+' 
+<br><br> 
+<h3><center>Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>Database Name</th> 
+<th>Recovery Model</th> 
+<th>Compatibility</th> 
+<th>File Type</th> 
+<th>File Size (MB)</th> 
+<th>Max Size</th> 
+<th>Growth Increment</th> 
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_model_compatibility_size_growth: 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query V: Last Backup Set Details 
+---------------------------------------------------------------------------------------------------------------------- 
+
+SELECT 
+BS.database_name 
+,BS.backup_set_id 
+,(CASE 
+WHEN BS.type = 'D' THEN 'Full Backup' 
+WHEN BS.type = 'F' THEN 'File Or Filegroup' 
+WHEN BS.type = 'G' THEN 'Differential File' 
+WHEN BS.type = 'I' THEN 'Differential Backup' 
+WHEN BS.type = 'L' THEN 'Log Backup' 
+WHEN BS.type = 'P' THEN 'Partial' 
+WHEN BS.type = 'Q' THEN 'Differential Partial' 
+ELSE 'N/A' 
+END) AS backup_type 
+,CONVERT (VARCHAR (19), BS.backup_start_date, 120) AS backup_start_date 
+,(CASE 
+WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) >= 360000 THEN '99:59:59+' 
+WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 1 THEN '__:__:__' 
+WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 60 THEN '__:__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2) 
+WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 3600 THEN '__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2) 
+ELSE RIGHT ('00'+CONVERT (VARCHAR (2), (DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))/3600),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT
+
+
+
+
+(VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2) 
+END) AS duration 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, ROUND (BS.backup_size/1048576.0, 0)), 1)), 4, 20)) AS backup_size_mb 
+,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, DATEDIFF (DAY, BS.backup_start_date, GETDATE ())), 1)), 4, 20)) AS days_ago 
+,ROW_NUMBER () OVER 
+( 
+PARTITION BY 
+BS.database_name 
+ORDER BY 
+BS.type 
+) AS database_filter_id 
+INTO 
+dbo.#ssaj_sssr_last_backup_set_temp 
+FROM 
+msdb.dbo.backupset BS 
+INNER JOIN 
+
+( 
+SELECT 
+MAX (X.backup_set_id) AS backup_set_id_max 
+FROM 
+msdb.dbo.backupset X 
+GROUP BY 
+X.database_name 
+,X.type 
+) A ON A.backup_set_id_max = BS.backup_set_id 
+
+
+IF @@ROWCOUNT = 0 
+BEGIN 
+
+GOTO skip_last_backup_set 
+
+END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',(CASE 
+WHEN X.database_filter_id = 1 THEN X.database_name 
+ELSE '' 
+END) AS 'td' 
+,'',X.backup_set_id AS 'td' 
+,'',X.backup_type AS 'td' 
+,'',X.backup_start_date AS 'td' 
+,'',X.duration AS 'td' 
+,'','right_align'+X.backup_size_mb AS 'td' 
+,'','right_align'+X.days_ago AS 'td' 
+FROM 
+dbo.#ssaj_sssr_last_backup_set_temp X 
+ORDER BY 
+X.database_name 
+,X.database_filter_id 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = @vBody+ 
+
+' 
+<br><br> 
+<h3><center>Last Backup Set Details</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>Database Name</th> 
+<th>Backup Set ID</th> 
+<th>Backup Type</th> 
+<th>Backup Start Date</th> 
+<th>Duration</th> 
+<th>Backup Size (MB)</th> 
+<th>Days Ago</th> 
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_last_backup_set: 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query VI: SQL Server Agent Jobs (Last 24 Hours) 
+---------------------------------------------------------------------------------------------------------------------- 
+
+SELECT 
+SJ.name AS job_name 
+,CONVERT (VARCHAR (19), CONVERT (DATETIME, CONVERT (VARCHAR (8), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)), 120) AS last_run_date_time ,(CASE WHEN SJH.run_status = 0 THEN 'Failed' 
+WHEN SJH.run_status = 1 THEN 'Succeeded' 
+WHEN SJH.run_status = 2 THEN 'Retry' 
+WHEN SJH.run_status = 3 THEN 'Canceled' 
+WHEN SJH.run_status = 4 THEN 'In Progress' 
+END) AS last_status 
+,(CASE 
+WHEN RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6) = '000000' THEN '__:__:__' 
+WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),4) = '0000' THEN '__:__:'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) 
+WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) = '00' THEN '__:'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) 
+ELSE LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) 
+END) AS duration 
+,ISNULL (CONVERT (VARCHAR (19), B.next_run_date_time, 120),'___________________') AS next_run_date_time 
+,ISNULL (REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (20), CONVERT (MONEY, DATEDIFF (DAY, GETDATE (), B.next_run_date_time)), 1)), 4, 20)),'N/A') AS days_away 
+INTO 
+dbo.#ssaj_sssr_agent_jobs_temp 
+FROM 
+msdb.dbo.sysjobs SJ 
+INNER JOIN msdb.dbo.sysjobhistory SJH ON SJH.job_id = SJ.job_id 
+AND CONVERT (DATETIME, CONVERT (VARCHAR (9), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)) >= @vDate_24_Hours_Ago 
+INNER JOIN 
+
+( 
+SELECT 
+MAX (X.instance_id) AS instance_id_max 
+FROM 
+msdb.dbo.sysjobhistory X 
+GROUP BY 
+X.job_id 
+) A ON A.instance_id_max = SJH.instance_id 
+
+LEFT JOIN 
+
+( 
+SELECT 
+SJS.job_id 
+,MIN (CONVERT (DATETIME, CONVERT (VARCHAR (9), SJS.next_run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),2))) AS next_run_date_time FROM msdb.dbo.sysjobschedules SJS WHERE SJS.next_run_date > 0 
+GROUP BY 
+SJS.job_id 
+) B ON B.job_id = SJ.job_id where SJH.run_status = 0 
+
+
+IF @@ROWCOUNT = 0 
+BEGIN 
+
+GOTO skip_agent_jobs 
+
+END 
+
+
+SET @vXML_String = 
+
+CONVERT (NVARCHAR (MAX), 
+( 
+SELECT 
+'',X.job_name AS 'td' 
+,'',X.last_run_date_time AS 'td' 
+,'',X.last_status AS 'td' 
+,'',X.duration AS 'td' 
+,'',X.next_run_date_time AS 'td' 
+,'','right_align'+X.days_away AS 'td' 
+FROM 
+dbo.#ssaj_sssr_agent_jobs_temp X 
+ORDER BY 
+X.job_name 
+FOR 
+XML PATH ('tr') 
+) 
+) 
+
+
+SET @vBody = @vBody+ 
+
+' 
+<br><br> 
+<h3><center>SQL Server Agent Jobs (Last 24 Hours)</center></h3> 
+<center> 
+<table border=1 cellpadding=2> 
+<tr bgcolor="#8181F7"> 
+<th>Job Name</th> 
+<th>Last Run Date / Time</th> 
+<th>Last Status</th> 
+<th>Duration</th> 
+<th>Next Run Date / Time</th> 
+<th>Days Away</th> 
+</tr> 
+' 
+
+
+SET @vBody = @vBody+@vXML_String+ 
+
+' 
+</table> 
+</center> 
+' 
+
+
+skip_agent_jobs: 
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL 
+BEGIN 
+
+DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp 
+
+END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Main Query VII: Unused Indexes 
+---------------------------------------------------------------------------------------------------------------------- 
+
+--IF @vUptime_Days <= @vUnused_Index_Uptime_Threshold 
+--BEGIN 
+
+-- GOTO skip_unused_indexes 
+
+--END 
+
+
+--CREATE TABLE dbo.#ssaj_sssr_unused_indexes_temp 
+
+-- ( 
+-- database_name NVARCHAR (512) 
+-- ,[object_name] SYSNAME 
+-- ,column_name SYSNAME 
+-- ,index_name SYSNAME 
+-- ,[disabled] VARCHAR (3) 
+-- ,hypothetical VARCHAR (3) 
+-- ,drop_index_statement NVARCHAR (4000) 
+-- ) 
+
+
+--SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name) 
+
+
+--WHILE @vDatabase_Name IS NOT NULL 
+--BEGIN 
+
+-- SET @vSQL_String = 
+
+-- ' 
+-- USE ['+@vDatabase_Name+']; 
+
+
+-- INSERT INTO dbo.#ssaj_sssr_unused_indexes_temp 
+
+-- SELECT 
+-- DB_NAME () AS database_name 
+-- ,O.name AS [object_name] 
+-- ,C.name AS column_name 
+-- ,I.name AS index_name 
+-- ,(CASE 
+-- WHEN I.is_disabled = 1 THEN ''Yes'' 
+-- ELSE ''No'' 
+-- END) AS [disabled] 
+-- ,(CASE 
+-- WHEN I.is_hypothetical = 1 THEN ''Yes'' 
+-- ELSE ''No'' 
+-- END) AS hypothetical 
+-- ,''USE ''+DB_NAME ()+''; DROP INDEX ''+S.name+''.''+O.name+''.''+I.name+'';'' AS drop_index_statement 
+-- FROM 
+-- [sys].[indexes] I 
+-- INNER JOIN [sys].[objects] O ON O.[object_id] = I.[object_id] 
+-- AND O.type = ''U'' 
+-- AND O.is_ms_shipped = 0 
+-- AND O.name <> ''sysdiagrams'' 
+-- INNER JOIN [sys].[tables] T ON T.[object_id] = I.[object_id] 
+-- INNER JOIN [sys].[schemas] S ON S.[schema_id] = T.[schema_id] 
+-- INNER JOIN [sys].[index_columns] IC ON IC.[object_id] = I.[object_id] 
+-- AND IC.index_id = I.index_id 
+-- INNER JOIN [sys].[columns] C ON C.[object_id] = IC.[object_id] 
+-- AND C.column_id = IC.column_id 
+-- WHERE 
+-- I.type > 0 
+-- AND I.is_primary_key = 0 
+-- AND I.is_unique_constraint = 0 
+-- AND NOT EXISTS 
+
+-- ( 
+-- SELECT 
+-- * 
+-- FROM 
+-- [sys].[index_columns] XIC 
+-- INNER JOIN [sys].[foreign_key_columns] FKC ON FKC.parent_object_id = XIC.[object_id] 
+-- AND FKC.parent_column_id = XIC.column_id 
+-- WHERE 
+-- XIC.[object_id] = I.[object_id] 
+-- AND XIC.index_id = I.index_id 
+-- ) 
+
+-- AND NOT EXISTS 
+
+-- ( 
+-- SELECT 
+-- * 
+-- FROM 
+-- [master].[sys].[dm_db_index_usage_stats] IUS 
+-- WHERE 
+-- IUS.database_id = DB_ID (DB_NAME ()) 
+-- AND IUS.[object_id] = I.[object_id] 
+-- AND IUS.index_id = I.index_id 
+-- ) 
+-- ' 
+
+
+-- EXEC (@vSQL_String) 
+
+
+-- SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name) 
+
+--END 
+
+
+--IF (SELECT COUNT  FROM dbo.#ssaj_sssr_unused_indexes_temp) = 0 
+--BEGIN 
+
+-- GOTO skip_unused_indexes 
+
+--END 
+
+
+--SET @vXML_String = 
+
+-- CONVERT (NVARCHAR (MAX), 
+-- ( 
+-- SELECT 
+-- '',X.database_name AS 'td' 
+-- ,'',X.[object_name] AS 'td' 
+-- ,'',X.column_name AS 'td' 
+-- ,'',X.index_name AS 'td' 
+-- ,'',X.[disabled] AS 'td' 
+-- ,'',X.hypothetical AS 'td' 
+-- ,'',X.drop_index_statement AS 'td' 
+-- FROM 
+-- dbo.#ssaj_sssr_unused_indexes_temp X 
+-- ORDER BY 
+-- X.database_name 
+-- ,X.[object_name] 
+-- ,X.column_name 
+-- ,X.index_name 
+-- FOR 
+-- XML PATH ('tr') 
+-- ) 
+-- ) 
+
+
+--SET @vBody = @vBody+ 
+
+-- ' 
+-- <br><br> 
+-- <h3><center>Unused Indexes</center></h3> 
+-- <center> 
+-- <table border=1 cellpadding=2> 
+-- <tr bgcolor="#8181F7"> 
+-- <th>Database Name</th> 
+-- <th>Object Name</th> 
+-- <th>Column Name</th> 
+-- <th>Index Name</th> 
+-- <th>Disabled</th> 
+-- <th>Hypothetical</th> 
+-- <th>Drop Index Statement</th> 
+-- </tr> 
+-- ' 
+
+
+--SET @vBody = @vBody+@vXML_String+ 
+
+-- ' 
+-- </table> 
+-- </center> 
+-- ' 
+
+
+--skip_unused_indexes: 
+
+
+--IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL 
+--BEGIN 
+
+-- DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp 
+
+--END 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- Variable Update: Finalize @vBody Variable Contents 
+---------------------------------------------------------------------------------------------------------------------- 
+
+SET @vBody = 
+
+' 
+<html> 
+<body> 
+<style type="text/css"> 
+table {font-size:8.0pt;font-family:Arial;text-align:left;} 
+tr {text-align:left;} 
+</style> 
+' 
+
++@vBody+ 
+
+' 
+</body> 
+</html> 
+' 
+
+
+SET @vBody = REPLACE (@vBody,'<td>right_align','<td align="right">') 
+
+
+---------------------------------------------------------------------------------------------------------------------- 
+-- sp_send_dbmail: Deliver Results / Notification To End User(s) 
+---------------------------------------------------------------------------------------------------------------------- 
+
+EXEC msdb.dbo.sp_send_dbmail 
+
+@recipients = @vRecipients
+,@copy_recipients = @vCopy_Recipients 
+,@subject = @VFullSub
+,@profile_name='SQLDBA' 
+,@body = @vBody 
+,@body_format = 'HTML'
+
+GO
+
+
+--tr_MScdc_db_ddl_event
+
+USE [master]
+GO
+
+/****** Object:  DdlTrigger [tr_MScdc_db_ddl_event]    Script Date: 9/12/2018 4:53:16 PM ******/
+SET ANSI_NULLS OFF
+GO
+
+SET QUOTED_IDENTIFIER OFF
+GO
+
+
+create trigger [tr_MScdc_db_ddl_event] on all server for ALTER_DATABASE, DROP_DATABASE
+            as 
+set ANSI_NULLS ON
+set ANSI_PADDING ON
+set ANSI_WARNINGS ON
+set ARITHABORT ON
+set CONCAT_NULL_YIELDS_NULL ON
+set NUMERIC_ROUNDABORT OFF
+set QUOTED_IDENTIFIER ON
+
+declare @EventData xml, @retcode int
+set @EventData=EventData()  
+if object_id('sys.sp_MScdc_db_ddl_event' ) is not null
+begin 
+exec @retcode = sys.sp_MScdc_db_ddl_event @EventData
+if @@error <> 0 or @retcode <> 0 
+begin
+rollback tran
+end
+end
+ 
+
+GO
+
+SET ANSI_NULLS OFF
+GO
+
+SET QUOTED_IDENTIFIER OFF
+GO
+
+ENABLE TRIGGER [tr_MScdc_db_ddl_event] ON ALL SERVER
+GO
+
+
+--connection limit trigger
+
+USE [master]
+GO
+
+/****** Object:  DdlTrigger [connection_limit_trigger]    Script Date: 9/12/2018 4:50:45 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+CREATE TRIGGER [connection_limit_trigger]
+ON ALL SERVER WITH EXECUTE AS 'sa'
+FOR LOGON
+AS
+
+BEGIN
+IF ((ORIGINAL_LOGIN ()  <> 'sa')
+AND (ORIGINAL_LOGIN () <> '##MS_PolicyTsqlExecutionLogin##')
+AND (ORIGINAL_LOGIN () <> 'RLIMUMBIDBN\support')
+AND (ORIGINAL_LOGIN () <> 'NT SERVICE\SQLWriter')
+AND (ORIGINAL_LOGIN () <> 'NT SERVICE\Winmgmt')
+AND (ORIGINAL_LOGIN () <> 'NT SERVICE\MSSQLSERVER')
+AND (ORIGINAL_LOGIN () <> 'NT AUTHORITY\SYSTEM')
+AND (ORIGINAL_LOGIN () <> 'NT SERVICE\SQLSERVERAGENT')
+--AND (ORIGINAL_LOGIN () <> 'bizops')
+AND (ORIGINAL_LOGIN () <> '9014757')
+AND (ORIGINAL_LOGIN () <> 'RELIANCECAPITAL\9028631')
+AND (ORIGINAL_LOGIN () <> 'RELIANCECAPITAL\9036020')
+--AND (ORIGINAL_LOGIN () <> 'Onlinebi')
+AND (ORIGINAL_LOGIN () <> '##MS_PolicyEventProcessingLogin##')
+AND (APP_NAME() LIKE 'Microsoft SQL Server Management Studio%' 
+OR APP_NAME()   LIKE 'SQLCMD'
+--OR APP_NAME()   LIKE '%SQL%'
+)
+)
+begin
+declare @msg varchar(500),
+@ipadd varchar (20) 
+set @msg = ORIGINAL_LOGIN() + ' has just try to logging in to ' +
+LTRIM(@@ServerName) + ' on '+ LTRIM(getdate()) + ' using ' +
+APP_NAME()
+set @ipadd = Cast(CONNECTIONPROPERTY('client_net_address') as varchar(20))
+ROLLBACK
+Insert into [Triggerevent](Mes,IPadd) values (@msg,@ipadd)
+--END
+end
+END
+
+
+GO
+
+SET ANSI_NULLS OFF
+GO
+
+SET QUOTED_IDENTIFIER OFF
+GO
+
+ENABLE TRIGGER [connection_limit_trigger] ON ALL SERVER
+GO
+
+
+---alert SP_Current_Process
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[SP_Current_Process]    Script Date: 9/12/2018 4:09:58 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROC [dbo].[SP_Current_Process] (@paraid as int)            
+AS            
+/*--------------------------------------------------------------------            
+Purpose: Shows what individual SQL statements are currently executing.            
+----------------------------------------------------------------------            
+Parameters: None.            
+Revision History:            
+ 24/07/2008  Ian_Stirk@yahoo.com Initial version            
+Example Usage:            
+ 1. exec YourServerName.master.dbo.dba_WhatSQLIsExecuting                           
+---------------------------------------------------------------------*/            
+BEGIN            
+    -- Do not lock anything, and do not get held up by any locks.            
+    SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED            
+            
+    -- What SQL Statements Are Currently Running?            
+          
+if @paraid<>0          
+BEGIN          
+    SELECT [Spid] = session_Id            
+ , ecid            
+ , [Database] = DB_NAME(sp.dbid)            
+ , [User] = nt_username            
+ , [Status] = er.status            
+ , [Wait] = wait_type            
+ , [Individual Query] = SUBSTRING (qt.text,             
+             er.statement_start_offset/2,            
+ (CASE WHEN er.statement_end_offset = -1            
+        THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2            
+  ELSE er.statement_end_offset END -             
+                                er.statement_start_offset)/2)            
+ ,[Parent Query] = qt.text            
+ , Program = program_name            
+ , Hostname            
+ , nt_domain            
+ , start_time            
+    FROM sys.dm_exec_requests er            
+    INNER JOIN sys.sysprocesses sp ON er.session_id = sp.spid            
+    CROSS APPLY sys.dm_exec_sql_text(er.sql_handle)as qt            
+    WHERE session_Id > 50              -- Ignore system spids.            
+    AND session_Id NOT IN (@@SPID)     -- Ignore this current statement.            
+ AND session_id = @paraid          
+    ORDER BY 1, 2            
+END          
+ELSE          
+BEGIN          
+    SELECT [Spid] = session_Id            
+ , ecid            
+ , [Database] = DB_NAME(sp.dbid)            
+ , [User] = nt_username            
+ , [Status] = er.status            
+ , [Wait] = wait_type            
+ , [Individual Query] = SUBSTRING (qt.text,             
+             er.statement_start_offset/2,            
+ (CASE WHEN er.statement_end_offset = -1            
+        THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2            
+  ELSE er.statement_end_offset END -             
+                                er.statement_start_offset)/2)            
+ ,[Parent Query] = qt.text            
+ , Program = program_name            
+ , Hostname            
+ , nt_domain            
+ , start_time            
+    FROM sys.dm_exec_requests er            
+    INNER JOIN sys.sysprocesses sp ON er.session_id = sp.spid            
+    CROSS APPLY sys.dm_exec_sql_text(er.sql_handle)as qt            
+    WHERE session_Id > 50              -- Ignore system spids.            
+    AND session_Id NOT IN (@@SPID)     -- Ignore this current statement.            
+    ORDER BY 1, 2            
+END          
+          
+END 
+
+
+
+--log running query
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[Alerts_Long_Runquery]    Script Date: 9/12/2018 4:06:41 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  
+    
+--select * from msdb..sysmail_profile                  
+ALTER procedure [dbo].[Alerts_Long_Runquery]                  
+as                 
+DECLARE @tableHTML  NVARCHAR(MAX)     
+if(    
+SELECT  count(req.session_id)    
+FROM sys.dm_exec_requests req          
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext          
+where req.status in ('RUNNING','SUSPENDED','RUNNABLE') and req.command<>'BACKUP DATABASE' and sqltext.text not like '%(@P0 int)SET XACT_ABORT ON%'  
+AND ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1)>=1    
+begin             
+print 'CPU Alert Condition True, Sending Email..'                 
+SET @tableHTML =                      
+N'<H1 bgcolor="green">Long Running Query</H1>' +                      
+N'<H2 bgcolor="green">Query Details</H2>' +                     
+ N'<table border="1">' +                    
+   N'<tr bgcolor="green"><th>Query</th><th>Session_Id</th><th>Status</th><th>Command</th><th>Database</th><th>Start-Time</th>'+                  
+   CAST ((    
+   SELECT           
+  td=sqltext.TEXT,'',          
+  td=req.session_id,'',          
+  td=req.status,'',          
+  td=req.command,'',          
+  td=Db_name(req.database_ID),'',          
+  td=req.start_time,''          
+ FROM sys.dm_exec_requests req          
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext          
+where ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1           
+AND status in ('RUNNING','SUSPENDED','RUNNABLE')  and req.command<>'BACKUP DATABASE'  and sqltext.text not like '%(@P0 int)SET XACT_ABORT ON%'         
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'                   
+     -- Change SQL Server Email notification code here                  
+     EXEC msdb.dbo.sp_send_dbmail                   
+    @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@rcap.co.in;',                  
+ --@recipients='Rlife.itsqldba@relianceada.com;',                  
+     @profile_name = 'IT SQL DBA',                      
+     @subject = 'Query Running More than 1 Hour on 10.126.143.47 server',                  
+     @body = @tableHTML,@body_format = 'HTML';                  
+     end          
+    
+
+	--db object detail
+
+	USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[DB_Obj_Details]    Script Date: 9/12/2018 4:05:24 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROC [dbo].[DB_Obj_Details]  
+AS  
+  
+SET NOCOUNT ON  
+  
+DECLARE @tbl_objdetails TABLE (id INT IDENTITY(1,1), DBName varchar(400), ObjType varchar(60),  
+        Total int)  
+  
+DECLARE @DBName AS VARCHAR(100)  
+DECLARE @SQL VARCHAR(4000)  
+ /* basic select statement */  
+DECLARE @SQLWithDB VARCHAR(4000)  
+   BEGIN  
+  
+  SET @SQL = 'SELECT DB_NAME() DBNAME,[Object], Total FROM   
+      (  
+       SELECT ''Stored Procedure'' [Object], COUNT(1) as Total from sys.objects where type = ''P'' and is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Table'' [Object] , COUNT(1) as Total from sys.objects where type = ''U'' and is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Views'' [Object] , COUNT(1) as Total from sys.objects where type = ''V'' and is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Clustered Index'' [Object] , COUNT(1) as Total from sys.objects where type = ''PK'' and is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Non Clustered Index'' [Object] , COUNT(1) AS Total FROM sys.objects WHERE type = ''F'' AND is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Function'' [Object] , COUNT(1) AS Total FROM sys.objects WHERE type = ''FN'' AND is_ms_shipped = ''0''  
+       UNION  
+       SELECT ''Trigger'' [Object] , COUNT(1) AS Total FROM sys.objects WHERE type = ''TR'' AND is_ms_shipped = ''0'' ) A'  
+  
+    
+  DECLARE DatabasesCursor CURSOR  
+         FOR  
+                 SELECT name  
+                 FROM   sys.databases  
+                 --Where Database_id = 15  
+                 WHERE  Database_id <> 2  
+                        AND sys.databases.state = 0  
+    /* exclude system and offline databases */  
+   END  
+  
+OPEN DatabasesCursor  
+FETCH NEXT FROM DatabasesCursor INTO @DBName  
+  
+WHILE @@fetch_status = 0  
+      BEGIN  
+  
+            SET @SQLWithDB = 'USE [' + @DBName + '];' + CHAR(10) + CHAR(13)  
+                + @SQL  
+     
+   insert into @tbl_objdetails  
+            EXEC (@SQLWithDB)  
+  
+            FETCH NEXT FROM DatabasesCursor INTO @DBName  
+  
+      END  
+  
+  
+CLOSE DatabasesCursor  
+DEALLOCATE DatabasesCursor  
+  
+ SELECT '10.126.143.55' AS ServIP, @@SERVERNAME SVRName, DBName, ObjType, Total, GETDATE() AS Exec_Date FROM @tbl_objdetails  
+  
+SET NOCOUNT ON  
+
+---job info
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[Job_info]    Script Date: 9/12/2018 4:04:08 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ 
+--create table job1 (name varchar(50),job_type varchar(20),
+--Schedule_Date datetime,
+--Time time,
+--LAst_Run_Date datetime,
+--status varchar(50))
+
+--select * from job
+
+--create table #job_New (name varchar(50),job_type varchar(20),
+--Schedule_Date datetime,
+--Time time,
+--LAst_Run_Date datetime,
+--status varchar(50))
+
+
+
+--insert into job1 values('master', 'Full', Getdate(), '13:00' ,getdate(),'successful')
+--insert into job1 values('Tran', 'Full',Getdate(), '13:00' ,getdate(),'successful')
+--insert into job1 values('Order','Incremental',Getdate(), '13:00' ,getdate(), 'successful')
+--insert into job1 values('Nav', 'Incremental',Getdate(), '13:00' ,getdate(),'successful')
+--update  job1 set status= 'failed' where name='master'
+
+
+--insert into #job_New 
+--select * from Job1
+
+--drop table #job_new
+----------------------------------------------------------------------------------------------
+
+ALTER procedure [dbo].[Job_info]  
+
+as  
+
+create table #job_New (name varchar(50),job_type varchar(20),
+Schedule_Date datetime,
+Time time,
+LAst_Run_Date datetime,
+status varchar(50))
+        
+-----------------------------------------------------------------------------
+insert into #job_New 
+select * from Job1
+----------------------------------------------------------------------
+if (select count (1) from #job_New where status<>'successful')>=1 
+
+begin      
+
+DECLARE @tableHTML  NVARCHAR(MAX) ;          
+
+SET @tableHTML =              
+
+N'<H1 bgcolor="magenta">Job Status</H1>'  +   
+
+N'<H1 bgcolor="magenta">Below Jobs are failed</H1>'  +           
+
+ N'<table border="1">' +            
+
+   N'<tr bgcolor="magenta"><th>Name</th><th>job_type</th><th>Schedule_Date</th><th>Time</th><th>LAst_Run_Date</th><th>status</th></tr>'+          
+
+   CAST ( ( SELECT           
+         
+
+   td= Name,'',          
+   td=job_type,'',
+   td= Schedule_Date,'',
+   td= Time,'',
+   td= LAst_Run_Date,'',
+   td= status,''          
+
+     FROM #job_New   where status<>'successful'
+
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'           
+
+     -- Change SQL Server Email notification code here          
+
+     EXEC msdb.dbo.sp_send_dbmail  
+
+     @recipients='Rlife.itsqldba@relianceada.com' , 
+
+    -- @recipients='Rlife.itsqldba@relianceada.com;',  
+
+     @profile_name = 'IT SQL DBA',  
+
+     @subject = 'JOB Status',  
+
+     @body = @tableHTML,@body_format = 'HTML';  
+
+     END          
+
+  -----------------------------------------------------       
+drop table #job_new
+             
+
+--LastKnownGoodCheckDBDateForAllDBs
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[LastKnownGoodCheckDBDateForAllDBs]    Script Date: 9/12/2018 4:03:06 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+ALTER Procedure [dbo].[LastKnownGoodCheckDBDateForAllDBs]
+
+AS
+
+
+
+BEGIN
+
+
+
+CREATE TABLE #DBInfoResults 
+
+(
+
+[ParentObject] VARCHAR(512),
+
+[Object] VARCHAR(512),
+
+[Field] VARCHAR(512),
+
+[VALUE] VARCHAR(512)
+
+)
+
+
+
+CREATE TABLE #FindDBCCLastKnownGoodDate
+
+(
+
+[DatabaseName] SYSNAME,
+
+[LastKnowGoodDBCCCheckDate] NVARCHAR(512), 
+
+)
+
+
+
+DECLARE
+
+@DatabaseName SYSNAME,
+
+@ExecTSQL VARCHAR(512);
+
+
+
+DECLARE cDBInfoResults CURSOR FOR 
+
+
+
+SELECT NAME
+
+FROM sys.databases
+
+WHERE STATE_DESC = 'ONLINE'
+
+
+
+OPEN cDBInfoResults;
+
+
+
+FETCH NEXT FROM cDBInfoResults INTO @DatabaseName;
+
+
+
+WHILE @@Fetch_Status = 0 
+
+
+
+BEGIN
+
+
+
+SET @ExecTSQL = 'Use [' + @DatabaseName +'];' + CHAR(10)+ CHAR(13) +
+
+'DBCC DBInfo() WITH TABLERESULTS, NO_INFOMSGS;' + CHAR(10)+ CHAR(13)
+
+
+
+INSERT INTO #DBInfoResults
+
+EXECUTE (@ExecTSQL);
+
+
+
+INSERT INTO #FindDBCCLastKnownGoodDate
+
+(DatabaseName, [LastKnowGoodDBCCCheckDate])
+
+
+
+SELECT @DatabaseName, VALUE 
+
+FROM #DBInfoResults where Field = 'dbi_dbccLastKnownGood' 
+
+
+
+TRUNCATE TABLE #DBInfoResults;
+
+
+
+FETCH NEXT FROM cDBInfoResults INTO @DatabaseName;
+
+
+
+END
+
+
+
+CLOSE cDBInfoResults;
+
+DEALLOCATE cDBInfoResults;
+
+
+
+SELECT 
+
+ DISTINCT([DatabaseName]) AS [Database Name]
+
+,[LastKnowGoodDBCCCheckDate] AS [Last Know Good DBCC Check Date] 
+
+FROM #FindDBCCLastKnownGoodDate
+
+ORDER BY [LastKnowGoodDBCCCheckDate] DESC
+
+
+
+END
+
+---qc
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[qc]    Script Date: 9/12/2018 4:02:09 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+      
+ALTER procedure [dbo].[qc]      
+      
+as       
+begin      
+      
+--USE MASTER      
+--      
+SELECT SESSION_ID, '[' + CAST(DATABASE_ID AS VARCHAR(10)) + '] ' + DB_NAME(DATABASE_ID) AS [DATABASE],       
+PERCENT_COMPLETE, START_TIME, STATUS, COMMAND,       
+DATEADD(MS, ESTIMATED_COMPLETION_TIME, GETDATE()) AS ESTIMATED_COMPLETION_TIME, CPU_TIME      
+FROM SYS.DM_EXEC_REQUESTS       
+--Apply this Where Clause Filter if you need to check specific events such as Backups, Restores, Index et al.       
+WHERE COMMAND LIKE '%BACKUP%' OR COMMAND LIKE '%RESTORE%' OR COMMAND LIKE '%INDEX%' OR COMMAND LIKE '%DBCC%'      
+      
+      
+end 
+
+
+--	alert for [Send_DB_MAIL_AT_SQL_RESTARt
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[Send_DB_MAIL_AT_SQL_RESTART]    Script Date: 9/12/2018 4:01:04 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+ALTER PROCEDURE [dbo].[Send_DB_MAIL_AT_SQL_RESTART]    
+ -- Add the parameters for the stored procedure here    
+     
+AS    
+BEGIN    
+ -- SET NOCOUNT ON added to prevent extra result sets from    
+ -- interfering with SELECT statements.    
+ SET NOCOUNT ON;    
+    
+    -- Insert statements for procedure here    
+     
+ EXEC msdb.dbo.sp_send_dbmail    
+    @profile_name = 'IT SQL DBA',    
+    @recipients = 'Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;abhijit.shedulkar@cloverinfotech.com;',    
+    @body = '"This is an automated notification. Please do not reply to this mail.     
+    
+10.126.143.47 SQL Server Service has been restarted."',    
+    @subject = '10.126.143.47 SQL Server Service Restarted' ;    
+    
+END    
+
+
+---	alert for SQL_Helts
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[SQL_Helts]    Script Date: 9/12/2018 3:59:51 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER procedure [dbo].[SQL_Helts]
+as
+
+
+
+--select @@servername
+--drop table s2
+-------------------------------------create table script-----------------------
+--CREATE TABLE [dbo].[s1](
+-- [ID] [int] IDENTITY(1,1) NOT NULL,
+-- [SQL_Server_service] [varchar](100) NULL
+--) ON [PRIMARY]
+--GO
+--CREATE TABLE [dbo].[s2](
+-- [ID] [int] IDENTITY(1,1) NOT NULL,
+-- [SQL_Agent_service] [varchar](100) NULL
+--) ON [PRIMARY]
+--go
+
+--create table SQL_services (Server_IP varchar(100),SQL_Server_service varchar(100),SQL_Agent_service varchar(100))
+--go
+
+--create table SQL_server_restart (Server_IP varchar(100),port_no varchar(50),Server_restart_date varchar(100))
+--go
+
+--create table Server_status (Server_IP varchar(100),port_no varchar(50),Server_restart_date varchar(100),SQL_Server_service varchar(100),SQL_Agent_service varchar(100))
+--go
+
+truncate table s1
+insert into s1 
+exec master.dbo.xp_servicecontrol 'QUERYSTATE', 'MSSQLServer'
+truncate table s2
+insert into s2
+exec master.dbo.xp_servicecontrol 'QUERYSTATE', 'SQLServerAgent'
+truncate table SQL_services
+truncate table SQL_services
+insert into SQL_services 
+select '10.126.143.47' as server_IP ,a.SQL_Server_service,b.SQL_Agent_service from s1 a,s2 b where a.id=b.id
+truncate table SQL_server_restart
+insert into SQL_server_restart
+select '10.126.143.47' as server_IP, '1981' as port_no,create_date  from sys.databases where name='tempdb' 
+truncate table Server_status
+insert into Server_status
+select a.server_IP, a.port_no,a.Server_restart_date,b.SQL_Server_service,b.SQL_Agent_service
+ from SQL_server_restart a ,SQL_services b  where a.server_IP=b.server_IP
+--truncate table s1
+--truncate table s2
+--truncate table SQL_services
+--truncate table Server_status
+
+--select * from s1
+--select * from s2
+--select * from SQL_services
+select * from Server_status
+
+
+---	alert for whats app
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[whatsup]    Script Date: 9/12/2018 3:59:04 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER procedure [dbo].[whatsup]
+
+as
+
+select sp.spid, DB_NAME(sp.dbid) as dbname,blocked,cmd,text,p.query_cost
+, cast(dateadd(minute, datediff(minute, sp.last_batch, getdate()), 0) as time(0) ) as running_time
+,last_batch,percent_complete,loginame,program_name,lastwaittype,c.client_net_address,
+p.required_memory_kb,p.granted_memory_kb,
+p.used_memory_kb,sp.cpu,sp.physical_io 
+from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+left join sys.dm_exec_query_memory_grants p on sp.spid=p.session_id
+left join sys.dm_exec_requests r on sp.spid=r.session_id
+left join sys.dm_exec_connections c on r.session_id=c.session_id
+where sp.status<>'sleeping' and sp.spid<>@@SPID
+order by sp.login_time asc 
+
+
+--alert for UnUsed_Indx_Details
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[UnUsed_Indx_Details]    Script Date: 9/12/2018 3:58:06 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+    
+ALTER PROC [dbo].[UnUsed_Indx_Details]      
+AS      
+      
+SET NOCOUNT ON      
+      
+DECLARE @Unused_Idx_details TABLE (id INT IDENTITY(1,1), DBName varchar(150), Idx_id int, TblName varchar(250),      
+IdxName varchar(450), Idx_Type varchar(50), User_Seeks varchar(50),User_Scans varchar(50), User_Lookups varchar(50),      
+User_updates varchar(50), Last_user_seek varchar(50), Last_user_scan varchar(50), Drop_cmd text)      
+      
+DECLARE @DBName AS VARCHAR(150)      
+DECLARE @SQL VARCHAR(4000)      
+ /* basic select statement */      
+DECLARE @SQLWithDB VARCHAR(4000)      
+      
+   BEGIN      
+      
+  SET @SQL = 'select distinct DB_NAME() AS DBName,      
+  ind.Index_id,obj.Name as TableName,ind.Name as IndexName,ind.Type_Desc,indUsage.user_seeks, indUsage.user_scans,       
+indUsage.user_lookups, indUsage.user_updates, indUsage.last_user_seek, indUsage.last_user_scan,      
+''drop index ['' + ind.name + ''] ON ['' + obj.name + '']'' as DropCommand      
+from      
+      Sys.Indexes as ind JOIN Sys.Objects as obj on ind.object_id=obj.Object_ID      
+      LEFT JOIN  sys.dm_db_index_usage_stats indUsage ON       
+      ind.object_id = indUsage.object_id       
+      AND ind.Index_id=indUsage.Index_id      
+where       
+      ind.type_desc<>''HEAP'' and obj.type<>''S''      
+      AND objectproperty(obj.object_id,''isusertable'') = 1      
+      AND (isnull(indUsage.user_seeks,0)=0 AND isnull(indUsage.user_scans,0)=0 and isnull(indUsage.user_lookups,0)=0)      
+order by obj.name,ind.Name      
+      
+'      
+       
+  DECLARE DatabasesCursor CURSOR      
+         FOR      
+                 SELECT name      
+                 FROM   sys.databases      
+                 --Where Database_id = 15      
+                 WHERE  Database_id > 4      
+                        AND sys.databases.state = 0      
+    /* exclude system and offline databases */      
+   END      
+      
+OPEN DatabasesCursor      
+FETCH NEXT FROM DatabasesCursor INTO @DBName      
+      
+WHILE @@fetch_status = 0      
+      BEGIN      
+      
+            SET @SQLWithDB = 'USE [' + @DBName + '];' + CHAR(10) + CHAR(13)      
+                + @SQL      
+         
+         
+   insert into @Unused_Idx_details      
+            EXEC (@SQLWithDB)      
+            --print @SQLWithDB      
+      
+            FETCH NEXT FROM DatabasesCursor INTO @DBName      
+      
+      END      
+      
+      
+CLOSE DatabasesCursor      
+DEALLOCATE DatabasesCursor      
+      
+ SELECT '143.47' AS ServIP, @@SERVERNAME SVRName, DBName, Idx_id, TblName, IdxName,      
+ Idx_Type, User_Seeks,User_Scans, User_Lookups,      
+ User_updates, Last_user_seek, Last_user_scan, Drop_cmd,      
+ GETDATE() AS Exec_Date FROM @Unused_Idx_details      
+      
+SET NOCOUNT ON 
+
+
+--alert for login
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[sp_help_revlogin]    Script Date: 9/12/2018 3:56:18 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[sp_help_revlogin] @login_name sysname = NULL AS
+DECLARE @name sysname
+DECLARE @type varchar (1)
+DECLARE @hasaccess int
+DECLARE @denylogin int
+DECLARE @is_disabled int
+DECLARE @PWD_varbinary  varbinary (256)
+DECLARE @PWD_string  varchar (514)
+DECLARE @SID_varbinary varbinary (85)
+DECLARE @SID_string varchar (514)
+DECLARE @tmpstr  varchar (1024)
+DECLARE @is_policy_checked varchar (3)
+DECLARE @is_expiration_checked varchar (3)
+
+DECLARE @defaultdb sysname
+ 
+IF (@login_name IS NULL)
+  DECLARE login_curs CURSOR FOR
+
+      SELECT p.sid, p.name, p.type, p.is_disabled, p.default_database_name, l.hasaccess, l.denylogin FROM 
+sys.server_principals p LEFT JOIN sys.syslogins l
+      ON ( l.name = p.name ) WHERE p.type IN ( 'S', 'G', 'U' ) AND p.name <> 'sa'
+ELSE
+  DECLARE login_curs CURSOR FOR
+
+
+      SELECT p.sid, p.name, p.type, p.is_disabled, p.default_database_name, l.hasaccess, l.denylogin FROM 
+sys.server_principals p LEFT JOIN sys.syslogins l
+      ON ( l.name = p.name ) WHERE p.type IN ( 'S', 'G', 'U' ) AND p.name = @login_name
+OPEN login_curs
+
+FETCH NEXT FROM login_curs INTO @SID_varbinary, @name, @type, @is_disabled, @defaultdb, @hasaccess, @denylogin
+IF (@@fetch_status = -1)
+BEGIN
+  PRINT 'No login(s) found.'
+  CLOSE login_curs
+  DEALLOCATE login_curs
+  RETURN -1
+END
+SET @tmpstr = '/* sp_help_revlogin script '
+PRINT @tmpstr
+SET @tmpstr = '** Generated ' + CONVERT (varchar, GETDATE()) + ' on ' + @@SERVERNAME + ' */'
+PRINT @tmpstr
+PRINT ''
+WHILE (@@fetch_status <> -1)
+BEGIN
+  IF (@@fetch_status <> -2)
+  BEGIN
+    PRINT ''
+    SET @tmpstr = '-- Login: ' + @name
+    PRINT @tmpstr
+    IF (@type IN ( 'G', 'U'))
+    BEGIN -- NT authenticated account/group
+
+      SET @tmpstr = 'CREATE LOGIN ' + QUOTENAME( @name ) + ' FROM WINDOWS WITH DEFAULT_DATABASE = [' + @defaultdb + ']'
+    END
+    ELSE BEGIN -- SQL Server authentication
+        -- obtain password and sid
+            SET @PWD_varbinary = CAST( LOGINPROPERTY( @name, 'PasswordHash' ) AS varbinary (256) )
+        EXEC sp_hexadecimal @PWD_varbinary, @PWD_string OUT
+        EXEC sp_hexadecimal @SID_varbinary,@SID_string OUT
+ 
+        -- obtain password policy state
+        SELECT @is_policy_checked = CASE is_policy_checked WHEN 1 THEN 'ON' WHEN 0 THEN 'OFF' ELSE NULL END FROM sys.sql_logins WHERE name = @name
+        SELECT @is_expiration_checked = CASE is_expiration_checked WHEN 1 THEN 'ON' WHEN 0 THEN 'OFF' ELSE NULL END FROM sys.sql_logins WHERE name = @name
+ 
+            SET @tmpstr = 'CREATE LOGIN ' + QUOTENAME( @name ) + ' WITH PASSWORD = ' + @PWD_string + ' HASHED, SID = ' + @SID_string + ', DEFAULT_DATABASE = [' + @defaultdb + ']'
+
+        IF ( @is_policy_checked IS NOT NULL )
+        BEGIN
+          SET @tmpstr = @tmpstr + ', CHECK_POLICY = ' + @is_policy_checked
+        END
+        IF ( @is_expiration_checked IS NOT NULL )
+        BEGIN
+          SET @tmpstr = @tmpstr + ', CHECK_EXPIRATION = ' + @is_expiration_checked
+        END
+    END
+    IF (@denylogin = 1)
+    BEGIN -- login is denied access
+      SET @tmpstr = @tmpstr + '; DENY CONNECT SQL TO ' + QUOTENAME( @name )
+    END
+    ELSE IF (@hasaccess = 0)
+    BEGIN -- login exists but does not have access
+      SET @tmpstr = @tmpstr + '; REVOKE CONNECT SQL TO ' + QUOTENAME( @name )
+    END
+    IF (@is_disabled = 1)
+    BEGIN -- login is disabled
+      SET @tmpstr = @tmpstr + '; ALTER LOGIN ' + QUOTENAME( @name ) + ' DISABLE'
+    END
+    PRINT @tmpstr
+  END
+
+  FETCH NEXT FROM login_curs INTO @SID_varbinary, @name, @type, @is_disabled, @defaultdb, @hasaccess, @denylogin
+   END
+CLOSE login_curs
+DEALLOCATE login_curs
+RETURN 0
+
+-- 	alert for low memeory
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[Alert_low_memory]    Script Date: 9/12/2018 3:54:57 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+ALTER proc [dbo].[Alert_low_memory]    
+as    
+ 
+if    
+(SELECT top 1 (available_physical_memory_kb)/(1024) 
+FROM TempTables_47..memory_alert   
+where  (available_physical_memory_kb/1024)<512
+and date_time >= DATEADD(mi, -10, GETDATE()))>=1
+
+--and DATEDIFF(n,date_time,getdate())>5)>=1   
+begin    
+  EXEC msdb.dbo.sp_send_dbmail               
+     --@recipients='Rlife.itsqldba@relianceada.com;abhijit.shedulkar@cloverinfotech.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;',              
+     @recipients='Rlife.itsqldba@relianceada.com;',              
+     @profile_name = 'IT SQL DBA',                  
+     @subject = '10.126.143.47 :Memory less than 512 MB since last 10 mins',              
+     @body ='10.126.143.47 :Memory less than 512 MB since last 10 mins';              
+ end
+
+--	allert for index detail
+
+USE [master]
+GO
+/****** Object:  StoredProcedure [dbo].[Index_Details]    Script Date: 9/12/2018 3:53:41 PM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROC [dbo].[Index_Details]      
+AS      
+      
+SET NOCOUNT ON      
+      
+DECLARE @tbl_Index_details TABLE (TransID int primary key identity(1,1), DBName varchar(400), TblName varchar(250), Idx_Name varchar(1000),KeyCols varchar(1500), IncludeCols varchar(2000))       
+             
+DECLARE @DBName AS VARCHAR(400)      
+DECLARE @SQL VARCHAR(4000)      
+ /* basic select statement */      
+DECLARE @SQLWithDB VARCHAR(4000)      
+   BEGIN      
+      
+  SET @SQL = 'SELECT DB_NAME() AS DBName, ''[''+Sch.name+''].[''+ Tab.[name]+'']'' AS TableName,      
+Ind.[name] AS IndexName,      
+SUBSTRING(( SELECT '', '' + AC.name      
+FROM sys.[tables] AS T      
+INNER JOIN sys.[indexes] I      
+ON T.[object_id] = I.[object_id]      
+INNER JOIN sys.[index_columns] IC      
+ON I.[object_id] = IC.[object_id]      
+AND I.[index_id] = IC.[index_id]      
+INNER JOIN sys.[all_columns] AC      
+ON T.[object_id] = AC.[object_id]      
+AND IC.[column_id] = AC.[column_id]      
+WHERE Ind.[object_id] = I.[object_id]      
+AND Ind.index_id = I.index_id      
+AND IC.is_included_column = 0      
+ORDER BY IC.key_ordinal      
+FOR      
+XML PATH('''')      
+), 2, 8000) AS KeyCols,      
+SUBSTRING(( SELECT '', '' + AC.name      
+FROM sys.[tables] AS T      
+INNER JOIN sys.[indexes] I      
+ON T.[object_id] = I.[object_id]      
+INNER JOIN sys.[index_columns] IC      
+ON I.[object_id] = IC.[object_id]      
+AND I.[index_id] = IC.[index_id]      
+INNER JOIN sys.[all_columns] AC      
+ON T.[object_id] = AC.[object_id]      
+AND IC.[column_id] = AC.[column_id]      
+WHERE Ind.[object_id] = I.[object_id]      
+AND Ind.index_id = I.index_id      
+AND IC.is_included_column = 1      
+ORDER BY IC.key_ordinal      
+FOR      
+XML PATH('''')      
+), 2, 8000) AS IncludeCols      
+FROM sys.[indexes] Ind      
+INNER JOIN sys.[tables] AS Tab      
+ON Tab.[object_id] = Ind.[object_id]      
+INNER JOIN sys.[schemas] AS Sch      
+ON Sch.[schema_id] = Tab.[schema_id]      
+ORDER BY TableName       
+      
+'      
+        
+  DECLARE DatabasesCursor CURSOR      
+         FOR      
+                 SELECT name      
+                 FROM   sys.databases      
+                 --Where Database_id = 15      
+                 WHERE  Database_id >4       
+                        AND sys.databases.state = 0      
+    /* exclude system and offline databases */      
+   END      
+      
+OPEN DatabasesCursor      
+FETCH NEXT FROM DatabasesCursor INTO @DBName      
+      
+WHILE @@fetch_status = 0      
+      BEGIN      
+      
+            SET @SQLWithDB = 'USE [' + @DBName + '];' + CHAR(10) + CHAR(13)      
+                + @SQL      
+         
+   --print @sqlwithDB      
+   insert into @tbl_Index_details      
+            EXEC (@SQLWithDB)      
+      
+            FETCH NEXT FROM DatabasesCursor INTO @DBName      
+      
+      END      
+      
+      
+CLOSE DatabasesCursor      
+DEALLOCATE DatabasesCursor      
+      
+ SELECT '143.47' AS ServIP, @@SERVERNAME ServName, DBName, TblName, Idx_Name, KeyCols, IncludeCols, GETDATE() AS Exec_Date, GETDATE() AS Exec_Dt FROM @tbl_Index_details      
+       
+      
+SET NOCOUNT ON 
+
+
+--	Kill_Sleeping_Running Since last One Hour alert every 30 min
+
+use master
+
+
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and datepart(hh,login_time)<(datepart(hh,getdate())-10)
+
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+
+CLOSE c_Users
+DEALLOCATE c_Users
+
+
+--	highCostquery alert
+
+use yourdb
+
+
+
+
+
+sp_msforeachdb 'Use[?]
+insert into TempTables_47..highCostquery
+SELECT TOP 15
+        qs.total_elapsed_time / qs.execution_count / 1000000.0 AS average_seconds,
+    qs.total_elapsed_time / 1000000.0 AS total_seconds,
+    qs.execution_count,
+    SUBSTRING (qt.text,qs.statement_start_offset/2,
+         (CASE WHEN qs.statement_end_offset = -1
+            THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2) AS individual_query,
+    o.name AS object_name,
+    DB_NAME(qt.dbid) AS database_name,getdate()
+  FROM sys.dm_exec_query_stats qs
+    CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+    LEFT OUTER JOIN sys.objects o ON qt.objectid = o.object_id
+where qt.dbid = DB_ID()
+  ORDER BY average_seconds DESC'
+sp_msforeachdb 'Use[?]
+insert into TempTables_47..highCostquery
+SELECT TOP 15
+        qs.total_elapsed_time / qs.execution_count / 1000000.0 AS average_seconds,
+    qs.total_elapsed_time / 1000000.0 AS total_seconds,
+    qs.execution_count,
+    SUBSTRING (qt.text,qs.statement_start_offset/2,
+         (CASE WHEN qs.statement_end_offset = -1
+            THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2
+          ELSE qs.statement_end_offset END - qs.statement_start_offset)/2) AS individual_query,
+    o.name AS object_name,
+    DB_NAME(qt.dbid) AS database_name,getdate()
+  FROM sys.dm_exec_query_stats qs
+    CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+    LEFT OUTER JOIN sys.objects o ON qt.objectid = o.object_id
+where qt.dbid = DB_ID()
+  ORDER BY average_seconds DESC'
+
+
+
+
+
+--shedule every 24 min day
+
+--We require following information to start with performance tuning process:-
+
+--Current Configurations for APPLICATION,REPORTING SERVER and SQL SERVER DATABASE.
+--2. One month Consolidate report of CPU, Memory and DISK usage.
+--3. System study of SQL SERVER database for One month.
+--4. Top wait statistics for the SQL SERVER database.
+--5. SP that are taking time from application.
+--6. Network Latency and Disk IOPS given for the database VM.
+--Code level - Method used to access SSRS reports.
+--8. SSRS reports - Access using URL - response is taking time?
+
+
+
+---online database
+
+
+USE [msdb]
+GO
+
+/****** Object: Job [Clo_DB_Offline Status] Script Date: 09/03/2018 17:04:02 ******/
+BEGIN TRANSACTION
+DECLARE @ReturnCode INT
+SELECT @ReturnCode = 0
+/****** Object: JobCategory [[Uncategorized (Local)]]] Script Date: 09/03/2018 17:04:02 ******/
+IF NOT EXISTS (SELECT name FROM msdb.dbo.syscategories WHERE name=N'[Uncategorized (Local)]' AND category_class=1)
+BEGIN
+EXEC @ReturnCode = msdb.dbo.sp_add_category @class=N'JOB', @type=N'LOCAL', @name=N'[Uncategorized (Local)]'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+
+END
+
+DECLARE @jobId BINARY(16)
+EXEC @ReturnCode = msdb.dbo.sp_add_job @job_name=N'Clo_DB_Offline Status', 
+@enabled=1, 
+@notify_level_eventlog=0, 
+@notify_level_email=0, 
+@notify_level_netsend=0, 
+@notify_level_page=0, 
+@delete_level=0, 
+@description=N'No description available.', 
+@category_name=N'[Uncategorized (Local)]', 
+@owner_login_name=N'sa', @job_id = @jobId OUTPUT
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+/****** Object: Step [DB Status] Script Date: 09/03/2018 17:04:02 ******/
+EXEC @ReturnCode = msdb.dbo.sp_add_jobstep @job_id=@jobId, @step_name=N'DB Status', 
+@step_id=1, 
+@cmdexec_success_code=0, 
+@on_success_action=1, 
+@on_success_step_id=0, 
+@on_fail_action=2, 
+@on_fail_step_id=0, 
+@retry_attempts=0, 
+@retry_interval=0, 
+@os_run_priority=0, @subsystem=N'TSQL', 
+@command=N'if(select count from sys.databases where state_desc<>''Online'')>0
+Begin
+
+DECLARE @table NVARCHAR(MAX) ;
+Declare @subject varchar(max);
+set @subject=''Offline Databases Report on Server 10.4.6.23 -'' +@@servername
+
+SET @table =
+N''<H1>Offline Databases Report</H1>'' +
+N''<table border="1">'' +
+N''<tr><th>Database Name</th><th>Database Status</th></tr>'' +
+CAST ( ( Select td=name, '''',td=state_desc from sys.databases where state_desc<>''Online''
+FOR XML PATH(''tr''), TYPE
+) AS NVARCHAR(MAX) ) +
+N''</table>'' ;
+--
+EXEC msdb.dbo.sp_send_dbmail @profile_name=''sqldba'', --Change to your Profile Name
+@recipients = ''dba.life@bajajallianz.co.in'',
+@copy_recipients=''@cloverinfotech.com'',--Put the email address of those who want to receive the e-mail
+@subject = @subject,
+@body = @table,
+@body_format = ''HTML'' ;
+
+END', 
+@database_name=N'master', 
+@flags=0
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_update_job @job_id = @jobId, @start_step_id = 1
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobschedule @job_id=@jobId, @name=N'DB Statu', 
+@enabled=1, 
+@freq_type=4, 
+@freq_interval=1, 
+@freq_subday_type=4, 
+@freq_subday_interval=15, 
+@freq_relative_interval=0, 
+@freq_recurrence_factor=0, 
+@active_start_date=20171104, 
+@active_end_date=99991231, 
+@active_start_time=0, 
+@active_end_time=235959, 
+@schedule_uid=N'8343974b-2c3e-43fb-b192-6aa78afd71e8'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+EXEC @ReturnCode = msdb.dbo.sp_add_jobserver @job_id = @jobId, @server_name = N'(local)'
+IF (@@ERROR <> 0 OR @ReturnCode <> 0) GOTO QuitWithRollback
+COMMIT TRANSACTION
+GOTO EndSave
+QuitWithRollback:
+IF (@@TRANCOUNT > 0) ROLLBACK TRANSACTION
+EndSave:
+
+GO
+
+--
+
+Use master
+
+
+
+
+--select * from msdb..sysmail_profile              
+
+CREATE procedure [dbo].[Alerts_More_Sessions]              
+
+as             
+
+DECLARE @tableHTML  NVARCHAR(MAX) 
+
+DECLARE @tableHTML2  NVARCHAR(MAX) 
+
+DECLARE @vBody NVARCHAR(MAX) 
+
+if(
+
+select COUNT(session_id) as cnt from sys.dm_exec_sessions )>=2000
+
+begin         
+
+print 'Session Alert Condition True, Sending Email..'             
+
+SET @tableHTML =                  
+
+N'<H1 bgcolor="green">Session Details</H1>' +                  
+
+--N'<H2 bgcolor="green">Query Details</H2>' +                 
+
+ N'<table border="1">' +                
+
+   N'<tr bgcolor="green"><th>Login_Name</th><th>Status</th><th>SessionCount</th>'+
+
+   CAST ( (       
+
+   
+
+select 
+
+td=login_name,'',
+
+td=status,'',
+
+td=COUNT(session_id),''
+
+ from sys.dm_exec_sessions 
+
+group by login_name,status
+
+order by COUNT(session_id) desc
+
+    FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'               
+
+SET @tableHTML2 =                  
+
+N'<H1 bgcolor="green">Session Count</H1>' +                  
+
+--N'<H2 bgcolor="green">Query Details</H2>' +                 
+
+ N'<table border="1">' +                
+
+   N'<tr bgcolor="green"><th>Total_Sessions</th>'+
+
+   CAST ( (       
+
+   
+
+select 
+
+td =COUNT(1)
+
+ from sys.dm_exec_sessions 
+
+    FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'               
+
+Set @vBody=@tableHTML+@tableHTML2
+
+     -- Change SQL Server Email notification code here              
+
+     EXEC msdb.dbo.sp_send_dbmail               
+
+@recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@rcap.co.in;tushar.h.gaikwad@rcap.co.in',
+
+
+--@recipients='Rlife.itsqldba@relianceada.com;',              
+
+     @profile_name = 'IT SQL DBA',                  
+
+     @subject = 'More than 350 Session on 10.126.143.84 Server',              
+
+     @body = @vBody,
+
+@body_format = 'HTML';              
+
+     end      
+
+
+---log size
+
+
+
+
+Use master
+
+
+CREATE procedure [dbo].[DB_Log_Size]          
+
+
+
+
+
+
+
+as          
+
+
+
+
+
+
+
+   ------------------
+
+
+
+
+
+
+
+    IF OBJECT_ID('master.dbo.log_size') IS Not Null
+
+
+
+
+
+
+
+ BEGIN
+
+
+
+
+
+
+
+ DROP TABLE master.dbo.log_size
+
+
+
+
+
+
+
+ END
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+   create table master.dbo.log_size (Server_Name varchar(50),Database_Name varchar(250),Log_Size int)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+insert into log_size 
+
+
+
+
+
+
+
+select 'RLIMUMWEBDB7',b.name,(a.size*8)/(1024*1024)as log from sys.sysaltfiles a,sys.sysdatabases b where a.dbid = b.dbid and
+
+
+
+
+
+
+
+ a.filename like '%.ldf'and (a.size*8)/(1024*1024)>10
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+insert into log_size 
+
+
+
+
+
+
+
+select 'RLIBLRBIZOPSNEW',b.name,(a.size*8)/(1024*1024)as log from [BIZOPS_DR].master.sys.sysaltfiles a,[BIZOPS_DR].master.sys.sysdatabases b where a.dbid = b.dbid and
+
+
+
+
+
+
+
+ a.filename like '%.ldf'and (a.size*8)/(1024*1024)>10
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+ --select * from log_size
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+   
+
+
+
+
+
+
+
+   -------------
+
+
+
+
+
+
+
+if (select COUNT(1)          
+
+
+
+
+
+
+
+from log_size )>=1        
+
+
+
+
+
+
+
+begin      
+
+
+
+
+
+
+
+DECLARE @tableHTML  NVARCHAR(MAX) ;          
+
+
+
+
+
+
+
+SET @tableHTML =              
+
+
+
+
+
+
+
+N'<H3 bgcolor="magenta">Below database Log Size is greater than 10 GB on Server 10.126.143.84</H3>'  +        
+
+
+
+
+
+
+
+ N'<table border="1">' +            
+
+
+
+
+
+
+
+   N'<tr bgcolor="#8181F7"><th>Server_Name</th><th>DB_Name</th><th>Log_Size</th></tr>'+          
+
+
+
+
+
+
+
+   CAST ( ( SELECT           
+
+
+
+
+
+
+
+   td= Server_Name,'',          
+
+
+
+
+
+
+
+   td= Database_Name,'',          
+
+
+
+
+
+
+
+   td= Log_Size,''          
+
+
+
+
+
+
+
+     FROM log_size where server_name='RLIMUMWEBDB7' order by Database_Name desc     
+
+
+
+
+
+
+
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'    +       
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+N'<H3 bgcolor="magenta">Below database Log Size is greater than 10 GB on Server 10.126.239.173</H3>'  +         
+
+
+
+
+
+
+
+ N'<table border="1">' +            
+
+
+
+
+
+
+
+   N'<tr bgcolor="#8181F7"><th>Server_Name</th><th>DB_Name</th><th>Log_Size</th></tr>'+          
+
+
+
+
+
+
+
+   CAST ( ( SELECT           
+
+
+
+
+
+
+
+   td= Server_Name,'',          
+
+
+
+
+
+
+
+   td= Database_Name,'',          
+
+
+
+
+
+
+
+   td= Log_Size,''          
+
+
+
+
+
+
+
+     FROM log_size where server_name='RLIBLRBIZOPSNEW' order by Database_Name desc       
+
+
+
+
+
+
+
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+     -- Change SQL Server Email notification code here          
+
+
+
+
+
+
+
+     EXEC msdb.dbo.sp_send_dbmail  
+
+
+
+
+
+
+
+ --  @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;younus.dalvi@cloverinfotech.com',  
+
+
+
+
+
+
+
+    @recipients='Rlife.itsqldba@relianceada.com;',  
+
+
+
+
+
+
+
+     @profile_name = 'IT SQL DBA',  
+
+
+
+
+
+
+
+     @subject = 'Log Size is greater than 10 GB on ALWAYS-ON replica servers [143.84] and [239.173]',  
+
+
+
+
+
+
+
+     @body = @tableHTML,@body_format = 'HTML';  
+
+
+
+
+
+
+
+     
+
+
+
+
+
+
+
+       
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+END          
+
+
+
+
+
+
+
+     -- Drop the Temporary Table 
+
+
+
+
+
+
+
+--drop table log_size  
+
+
+--server helth report
+
+
+
+Use master
+
+
+
+CREATE PROCEDURE [dbo].[usp_SQL_Server_System_Report]  
+
+
+
+        
+
+
+
+AS        
+
+
+
+        
+
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED        
+
+
+
+SET NOCOUNT ON      
+
+
+
+SET ANSI_WARNINGS ON      
+
+
+
+SET ANSI_WARNINGS ON        
+
+
+
+SET ARITHABORT OFF        
+
+
+
+SET ARITHIGNORE ON        
+
+
+
+        
+
+
+
+        
+
+
+
+DECLARE @vRecipients AS VARCHAR (MAX)        
+
+
+
+DECLARE @vCopy_Recipients AS VARCHAR (MAX)        
+
+
+
+DECLARE @vUnused_Index_Uptime_Threshold AS INT        
+
+
+
+DECLARE @vOnline_Since AS NVARCHAR (19)        
+
+
+
+DECLARE @vUptime_Days AS INT        
+
+
+
+DECLARE @vDate_24_Hours_Ago AS DATETIME        
+
+
+
+DECLARE @vDate_Now AS DATETIME        
+
+
+
+DECLARE @vSubject AS NVARCHAR (256)        
+
+
+
+DECLARE @vFixed_Drives_Free_Space_Table AS TABLE (drive VARCHAR (5),TotalSize int, FreeSpace INT,Percentage int)     
+
+
+
+DECLARE @vDatabase_Name AS NVARCHAR (500)        
+
+
+
+DECLARE @vXML_String AS NVARCHAR (MAX)        
+
+
+
+DECLARE @vBody AS NVARCHAR (MAX)        
+
+
+
+DECLARE @vSQL_String AS NVARCHAR (MAX)        
+
+
+
+    
+
+
+
+DECLARE @hr int      
+
+
+
+DECLARE @fso int      
+
+
+
+DECLARE @drive char(1)      
+
+
+
+DECLARE @odrive int      
+
+
+
+DECLARE @TotalSize varchar(20)      
+
+
+
+DECLARE @MB bigint ; SET @MB = 1048576      
+
+
+
+CREATE TABLE #drives (ServerName varchar(50),      
+
+
+
+drive char(1) PRIMARY KEY,      
+
+
+
+FreeSpace int NULL,      
+
+
+
+TotalSize int NULL,      
+
+
+
+FreespaceTimestamp DATETIME NULL)      
+
+
+
+INSERT #drives(drive,FreeSpace)      
+
+
+
+EXEC master.dbo.xp_fixeddrives      
+
+
+
+EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@fso OUT      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+DECLARE dcur CURSOR LOCAL FAST_FORWARD      
+
+
+
+FOR SELECT drive from #drives      
+
+
+
+ORDER by drive      
+
+
+
+OPEN dcur    
+
+
+
+FETCH NEXT FROM dcur INTO @drive      
+
+
+
+WHILE @@FETCH_STATUS=0      
+
+
+
+BEGIN      
+
+
+
+EXEC @hr = sp_OAMethod @fso,'GetDrive', @odrive OUT, @drive      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+EXEC @hr = sp_OAGetProperty @odrive,'TotalSize', @TotalSize OUT      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @odrive      
+
+
+
+UPDATE #drives      
+
+
+
+SET TotalSize=@TotalSize/@MB    
+
+
+
+--, ServerName = @@servername, FreespaceTimestamp = (GETDATE())      
+
+
+
+WHERE drive=@drive      
+
+
+
+FETCH NEXT FROM dcur INTO @drive      
+
+
+
+END      
+
+
+
+CLOSE dcur      
+
+
+
+DEALLOCATE dcur      
+
+
+
+EXEC @hr=sp_OADestroy @fso      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+--insert into dbo.Disk_space_detail    
+
+
+
+insert into @vFixed_Drives_Free_Space_Table(drive,TotalSize,FreeSpace,Percentage)    
+
+
+
+SELECT --ServerName,      
+
+
+
+drive,      
+
+
+
+TotalSize as 'Total(MB)',      
+
+
+
+FreeSpace as 'Free(MB)',      
+
+
+
+CAST((FreeSpace/(TotalSize*1.0))*100.0 as int) as 'Free(%)'    
+
+
+
+--,  FreespaceTimestamp      
+
+
+
+FROM #drives      
+
+
+
+ORDER BY drive      
+
+
+
+DROP TABLE #drives    
+
+
+
+    
+
+
+
+        
+
+
+
+SET @vRecipients = 'rlife.itsqldba@relianceada.com; Mustufa.Rangwala@relianceada.com;Tushar.H.Gaikwad@relianceada.com;'  
+
+
+
+--SET @vRecipients = 'rlife.itsqldba@relianceada.com;'  
+
+
+
+SET @vCopy_Recipients = NULL        
+
+
+
+SET @vUnused_Index_Uptime_Threshold = 7        
+
+
+
+     
+
+
+
+SELECT        
+
+
+
+  @vOnline_Since = CONVERT (NVARCHAR (19), DB.create_date, 120)        
+
+
+
+ ,@vUptime_Days = DATEDIFF (DAY, DB.create_date, GETDATE ())        
+
+
+
+FROM        
+
+
+
+ [master].[sys].[databases] DB        
+
+
+
+WHERE        
+
+
+
+ DB.name = 'tempdb'        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vDate_24_Hours_Ago = GETDATE ()-1        
+
+
+
+SET @vDate_Now = @vDate_24_Hours_Ago+1        
+
+
+
+SET @vSubject = 'SQL Server System Report: '+'10.126.143.84'      
+
+
+
+SET @vXML_String = ''        
+
+
+
+SET @vBody = ''        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Error Trapping: Check If Temp Table(s) Already Exist(s) And Drop If Applicable        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL 
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query I: Server Instance Property Information        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+  
+
+
+
+Declare @AVGCPU as int    
+
+
+
+set @AVGCPU= (select AVG(convert(numeric(8,2),Total_CPU)) from [10.126.143.44].CPUGRAPH.dbo.CPU_DMV_84
+
+
+
+where DAY(Event_Time)=day(GETDATE()-1)    
+
+
+
+and DATEPART(HOUR,Event_Time) between 10 and 19  
+
+
+
+)       
+
+
+
+SELECT        
+
+
+
+  SERVERPROPERTY ('ComputerNamePhysicalNetBIOS') AS netbios_name        
+
+
+
+ ,@@SERVERNAME AS server_name        
+
+
+
+ ,REPLACE (CONVERT (NVARCHAR (128), SERVERPROPERTY ('Edition')),' Edition','') AS edition        
+
+
+
+ ,SERVERPROPERTY ('ProductVersion') AS version        
+
+
+
+ ,SERVERPROPERTY ('ProductLevel') AS [level]        
+
+
+
+ ,@vOnline_Since AS online_since        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, @vUptime_Days), 1)), 4, 15)) AS uptime_days      
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (int, @@TOTAL_READ), 1)), 4, 15)) AS reads        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (int, @@TOTAL_WRITE), 1)), 4, 15)) AS writes    
+
+
+
+ ,@AVGCPU as AverageCPU       
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_instance_property        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.netbios_name AS 'td'        
+
+
+
+    ,'',X.server_name AS 'td'        
+
+
+
+    ,'',X.edition AS 'td'        
+
+
+
+    ,'',X.version AS 'td'        
+
+
+
+    ,'',X.level AS 'td'        
+
+
+
+    ,'',X.online_since AS 'td'        
+
+
+
+    ,'','right_align'+X.uptime_days AS 'td'        
+
+
+
+    ,'','right_align'+X.reads AS 'td'        
+
+
+
+    ,'','right_align'+X.writes AS 'td'        
+
+
+
+   ,'',@AVGCPU AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_instance_property_temp X        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody =        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <h3><center>Server Instance Property Information</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>NetBIOS Name</th>        
+
+
+
+     <th>Server Name</th>        
+
+
+
+     <th>Edition</th>        
+
+
+
+     <th>Version</th>        
+
+
+
+     <th>Level</th>        
+
+
+
+     <th>Online Since</th>        
+
+
+
+     <th>Uptime Days</th>        
+
+
+
+     <th>Reads</th>        
+
+
+
+     <th>Writes</th>      
+
+
+
+     <th>AVG CPU %</th>      
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_instance_property:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query II: Fixed Drives Free Space        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+--INSERT INTO @vFixed_Drives_Free_Space_Table        
+
+
+
+        
+
+
+
+-- (        
+
+
+
+--   drive        
+
+
+
+--  ,free_space_mb    
+
+
+
+         
+
+
+
+-- )        
+
+
+
+        
+
+
+
+--EXEC master.dbo.xp_fixeddrives        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF @@ROWCOUNT = 0        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_fixed_drives_free_space        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.drive+':' AS 'td'        
+
+
+
+     ,'',X.Totalsize AS 'td'    
+
+
+
+     ,'',X.FreeSpace AS 'td'    
+
+
+
+     ,'',X.Percentage AS 'td'    
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+   FROM        
+
+
+
+    @vFixed_Drives_Free_Space_Table X        
+
+
+
+   ORDER BY        
+
+
+
+    X.drive        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Fixed Drives Free Space</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Drive</th>        
+
+
+
+     <th>Total Size (MB)</th>        
+
+
+
+    <th>Free Space(MB)</th>        
+
+
+
+    <th>%Free Space</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_fixed_drives_free_space:        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query III: Database Size (Summary) / Distribution Stats        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+CREATE TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+ (        
+
+
+
+   database_name NVARCHAR (500)        
+
+
+
+  ,total_size_mb NVARCHAR (15)        
+
+
+
+  ,unallocated_mb NVARCHAR (15)        
+
+
+
+  ,reserved_mb NVARCHAR (15)        
+
+
+
+  ,data_mb NVARCHAR (15)        
+
+
+
+  ,index_mb NVARCHAR (15)        
+
+
+
+  ,unused_mb NVARCHAR (15)        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name)        
+
+
+
+        
+
+
+
+        
+
+
+
+WHILE @vDatabase_Name IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ SET @vSQL_String =        
+
+
+
+        
+
+
+
+  '        
+
+
+
+   USE ['+@vDatabase_Name+'];        
+
+
+
+        
+
+
+
+        
+
+
+
+   INSERT INTO dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+   SELECT        
+
+
+
+     DB_NAME () AS database_name        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((A.total_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS total_size_mb        
+
+
+
+    ,(CASE        
+
+
+
+     WHEN A.database_size >= B.total_pages THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((A.database_size-B.total_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))        
+
+
+
+     ELSE ''0''        
+
+
+
+     END) AS unallocated_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((B.total_pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS reserved_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((B.pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS data_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((B.used_pages-B.pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS index_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((B.total_pages-B.used_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS unused_mb        
+
+
+
+   FROM        
+
+
+
+        
+
+
+
+    (        
+
+
+
+     SELECT        
+
+
+
+       SUM (CASE        
+
+
+
+        WHEN DBF.type = 0 THEN DBF.size        
+
+
+
+        ELSE 0        
+
+
+
+        END) AS database_size        
+
+
+
+      ,SUM (DBF.size) AS total_size        
+
+
+
+     FROM        
+
+
+
+      [sys].[database_files] AS DBF        
+
+
+
+     WHERE        
+
+
+
+      DBF.type IN (0,1)        
+
+
+
+    ) A        
+
+
+
+        
+
+
+
+    CROSS JOIN        
+
+
+
+        
+
+
+
+     (        
+
+
+
+      SELECT        
+
+
+
+        SUM (AU.total_pages) AS total_pages        
+
+
+
+       ,SUM (AU.used_pages) AS used_pages        
+
+
+
+       ,SUM (CASE        
+
+
+
+         WHEN IT.internal_type IN (202,204) THEN 0        
+
+
+
+         WHEN AU.type <> 1 THEN AU.used_pages        
+
+
+
+         WHEN P.index_id <= 1 THEN AU.data_pages        
+
+
+
+         ELSE 0        
+
+
+
+         END) AS pages        
+
+
+
+      FROM        
+
+
+
+       [sys].[partitions] P        
+
+
+
+       INNER JOIN [sys].[allocation_units] AU ON AU.container_id = P.partition_id        
+
+
+
+       LEFT JOIN [sys].[internal_tables] IT ON IT.[object_id] = P.[object_id]        
+
+
+
+     ) B        
+
+
+
+  '        
+
+
+
+        
+
+
+
+        
+
+
+
+ EXEC (@vSQL_String)        
+
+
+
+        
+
+
+
+        
+
+
+
+ SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name)        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF (SELECT COUNT (*) FROM dbo.#ssaj_sssr_database_size_distribution_stats_temp) = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_database_size_distribution_stats        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.database_name AS 'td'        
+
+
+
+    ,'','right_align'+X.total_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.unallocated_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.reserved_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.data_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.index_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.unused_mb AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_database_size_distribution_stats_temp X        
+
+
+
+   ORDER BY        
+
+
+
+    X.database_name        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Database Size (Summary) / Distribution Stats</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Total Size (MB)</th>        
+
+
+
+     <th>Unallocated (MB)</th>        
+
+
+
+     <th>Reserved (MB)</th>        
+
+
+
+     <th>Data (MB)</th>        
+
+
+
+     <th>Index (MB)</th>        
+
+
+
+     <th>Unused (MB)</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_database_size_distribution_stats:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query IV: Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  DB_NAME (MF.database_id) AS database_name        
+
+
+
+ ,DB.recovery_model_desc        
+
+
+
+ ,DB.compatibility_level        
+
+
+
+ ,CONVERT (NVARCHAR (10), LEFT (UPPER (MF.type_desc),1)+LOWER (SUBSTRING (MF.type_desc, 2, 250))) AS file_type        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS file_size_mb        
+
+
+
+ ,RIGHT ((CASE        
+
+
+
+    WHEN MF.growth = 0 THEN 'Fixed Size'        
+
+
+
+    WHEN MF.max_size = -1 THEN 'Unrestricted'        
+
+
+
+    WHEN MF.max_size = 0 THEN 'None'        
+
+
+
+    WHEN MF.max_size = 268435456 THEN '2 TB'        
+
+
+
+    ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.max_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))+' MB'        
+
+
+
+    END),15) AS max_size        
+
+
+
+ ,RIGHT ((CASE        
+
+
+
+    WHEN MF.growth = 0 THEN 'N/A'        
+
+
+
+    WHEN MF.is_percent_growth = 1 THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, MF.growth), 1)), 4, 15))+' %'        
+
+
+
+    ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.growth*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))+' MB'        
+
+
+
+    END),15) AS growth_increment        
+
+
+
+ ,ROW_NUMBER () OVER        
+
+
+
+      (        
+
+
+
+       PARTITION BY        
+
+
+
+        MF.database_id        
+
+
+
+       ORDER BY        
+
+
+
+         MF.type        
+
+
+
+        ,MF.[file_id]        
+
+
+
+      ) AS database_filter_id        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+FROM        
+
+
+
+ [master].[sys].[master_files] MF        
+
+
+
+ INNER JOIN [master].[sys].[databases] DB ON DB.database_id = MF.database_id        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_model_compatibility_size_growth        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.database_name        
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.recovery_model_desc        
+
+
+
+      ELSE '' 
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN ISNULL (CONVERT (VARCHAR (5), X.compatibility_level),'N/A')        
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',X.file_type AS 'td'        
+
+
+
+    ,'','right_align'+X.file_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.max_size AS 'td'        
+
+
+
+    ,'','right_align'+X.growth_increment AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_model_compatibility_size_growth_temp X        
+
+
+
+   ORDER BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.database_filter_id        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Recovery Model</th>        
+
+
+
+ <th>Compatibility</th>        
+
+
+
+     <th>File Type</th>        
+
+
+
+     <th>File Size (MB)</th>        
+
+
+
+     <th>Max Size</th>        
+
+
+
+     <th>Growth Increment</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_model_compatibility_size_growth:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query V: Last Backup Set Details        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  BS.database_name        
+
+
+
+ ,BS.backup_set_id        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN BS.type = 'D' THEN 'Database'        
+
+
+
+  WHEN BS.type = 'F' THEN 'File Or Filegroup'        
+
+
+
+  WHEN BS.type = 'G' THEN 'Differential File'        
+
+
+
+  WHEN BS.type = 'I' THEN 'Differential Database'        
+
+
+
+  WHEN BS.type = 'L' THEN 'Log'        
+
+
+
+  WHEN BS.type = 'P' THEN 'Partial'        
+
+
+
+  WHEN BS.type = 'Q' THEN 'Differential Partial'        
+
+
+
+  ELSE 'N/A'        
+
+
+
+  END) AS backup_type        
+
+
+
+ ,CONVERT (VARCHAR (19), BS.backup_start_date, 120) AS backup_start_date        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) >= 360000 THEN '99:59:59+'        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 1 THEN '__:__:__'        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 60 THEN '__:__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 3600 THEN '__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SEC
+OND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  ELSE RIGHT ('00'+CONVERT (VARCHAR (2), (DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))/3600),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT
+
+
+
+
+
+
+  
+
+
+
+  
+
+
+
+  
+
+
+
+    
+
+
+
+    
+
+
+
+      
+
+
+
+ (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  END) AS duration        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (BS.backup_size/1048576.0, 0)), 1)), 4, 15)) AS backup_size_mb        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, DATEDIFF (DAY, BS.backup_start_date, GETDATE ())), 1)), 4, 15)) AS days_ago        
+
+
+
+ ,ROW_NUMBER () OVER        
+
+
+
+      (        
+
+
+
+       PARTITION BY        
+
+
+
+        BS.database_name        
+
+
+
+       ORDER BY        
+
+
+
+        BS.type        
+
+
+
+      ) AS database_filter_id        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+FROM        
+
+
+
+ msdb.dbo.backupset BS        
+
+
+
+ INNER JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+    MAX (X.backup_set_id) AS backup_set_id_max        
+
+
+
+   FROM        
+
+
+
+    msdb.dbo.backupset X        
+
+
+
+   GROUP BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.type        
+
+
+
+  ) A ON A.backup_set_id_max = BS.backup_set_id        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_last_backup_set        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.database_name 
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',X.backup_set_id AS 'td'        
+
+
+
+    ,'',X.backup_type AS 'td'        
+
+
+
+    ,'',X.backup_start_date AS 'td'        
+
+
+
+    ,'',X.duration AS 'td'        
+
+
+
+    ,'','right_align'+X.backup_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.days_ago AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_last_backup_set_temp X        
+
+
+
+   ORDER BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.database_filter_id        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Last Backup Set Details</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Backup Set ID</th>        
+
+
+
+     <th>Backup Type</th>        
+
+
+
+     <th>Backup Start Date</th>        
+
+
+
+     <th>Duration</th>        
+
+
+
+     <th>Backup Size (MB)</th>        
+
+
+
+     <th>Days Ago</th>        
+
+
+
+    </tr>       
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_last_backup_set:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query VI: SQL Server Agent Jobs (Last 24 Hours)        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  SJ.name AS job_name        
+
+
+
+ ,CONVERT (VARCHAR (19), CONVERT (DATETIME, CONVERT (VARCHAR (8), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVE
+RT (VARCHAR (6), SJH.run_time),6),2)), 120) AS last_run_date_time ,(CASE    WHEN SJH.run_status = 0 THEN 'Failed'        
+
+
+
+  WHEN SJH.run_status = 1 THEN 'Succeeded'        
+
+
+
+  WHEN SJH.run_status = 2 THEN 'Retry'        
+
+
+
+  WHEN SJH.run_status = 3 THEN 'Canceled'        
+
+
+
+  WHEN SJH.run_status = 4 THEN 'In Progress'        
+
+
+
+  END) AS last_status        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6) = '000000' THEN '__:__:__'        
+
+
+
+  WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),4) = '0000' THEN '__:__:'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) = '00' THEN '__:'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  ELSE LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  END) AS duration        
+
+
+
+ ,ISNULL (CONVERT (VARCHAR (19), B.next_run_date_time, 120),'___________________') AS next_run_date_time        
+
+
+
+ ,ISNULL (REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, DATEDIFF (DAY, GETDATE (), B.next_run_date_time)), 1)), 4, 15)),'N/A') AS days_away        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+FROM        
+
+
+
+ msdb.dbo.sysjobs SJ        
+
+
+
+ INNER JOIN msdb.dbo.sysjobhistory SJH ON SJH.job_id = SJ.job_id        
+
+
+
+  AND CONVERT (DATETIME, CONVERT (VARCHAR (8), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), S
+JH.run_time),6),2)) >= @vDate_24_Hours_Ago        
+
+
+
+ INNER JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+    MAX (X.instance_id) AS instance_id_max        
+
+
+
+   FROM        
+
+
+
+    msdb.dbo.sysjobhistory X        
+
+
+
+   GROUP BY        
+
+
+
+    X.job_id        
+
+
+
+  ) A ON A.instance_id_max = SJH.instance_id        
+
+
+
+        
+
+
+
+ LEFT JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     SJS.job_id        
+
+
+
+    ,MIN (CONVERT (DATETIME, CONVERT (VARCHAR (8), SJS.next_run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVE
+RT (VARCHAR (6), SJS.next_run_time),6),2))) AS next_run_date_time  FROM  msdb.dbo.sysjobschedules SJS WHERE  SJS.next_run_date > 0        
+
+
+
+   GROUP BY        
+
+
+
+    SJS.job_id        
+
+
+
+  ) B ON B.job_id = SJ.job_id  where SJH.run_status = 0      
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_agent_jobs        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.job_name AS 'td'        
+
+
+
+,'',X.last_run_date_time AS 'td'        
+
+
+
+    ,'',X.last_status AS 'td'        
+
+
+
+    ,'',X.duration AS 'td'     
+
+
+
+    ,'',X.next_run_date_time AS 'td'        
+
+
+
+    ,'','right_align'+X.days_away AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_agent_jobs_temp X        
+
+
+
+   ORDER BY        
+
+
+
+    X.job_name        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>SQL Server Agent Jobs (Last 24 Hours)</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Job Name</th>        
+
+
+
+     <th>Last Run Date / Time</th>        
+
+
+
+     <th>Last Status</th>        
+
+
+
+     <th>Duration</th>        
+
+
+
+     <th>Next Run Date / Time</th>        
+
+
+
+     <th>Days Away</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_agent_jobs:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query VII: Unused Indexes        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+--IF @vUptime_Days <= @vUnused_Index_Uptime_Threshold        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_unused_indexes        
+
+
+
+        
+
+
+
+--END        
+
+
+
+      
+
+
+
+        
+
+
+
+--CREATE TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+-- (        
+
+
+
+--   database_name NVARCHAR (512)        
+
+
+
+--  ,[object_name] SYSNAME        
+
+
+
+--  ,column_name SYSNAME        
+
+
+
+--  ,index_name SYSNAME        
+
+
+
+--  ,[disabled] VARCHAR (3)        
+
+
+
+--  ,hypothetical VARCHAR (3)        
+
+
+
+--  ,drop_index_statement NVARCHAR (4000)        
+
+
+
+-- )        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name)        
+
+
+
+        
+
+
+
+        
+
+
+
+--WHILE @vDatabase_Name IS NOT NULL        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- SET @vSQL_String =        
+
+
+
+        
+
+
+
+--  '        
+
+
+
+--   USE ['+@vDatabase_Name+'];        
+
+
+
+        
+
+
+
+        
+
+
+
+--   INSERT INTO dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+--   SELECT        
+
+
+
+--     DB_NAME () AS database_name        
+
+
+
+--    ,O.name AS [object_name]        
+
+
+
+--    ,C.name AS column_name        
+
+
+
+--    ,I.name AS index_name        
+
+
+
+--    ,(CASE        
+
+
+
+--     WHEN I.is_disabled = 1 THEN ''Yes''        
+
+
+
+--     ELSE ''No''        
+
+
+
+--     END) AS [disabled]        
+
+
+
+--    ,(CASE        
+
+
+
+--     WHEN I.is_hypothetical = 1 THEN ''Yes''        
+
+
+
+--     ELSE ''No''        
+
+
+
+--     END) AS hypothetical        
+
+
+
+--    ,''USE ''+DB_NAME ()+''; DROP INDEX ''+S.name+''.''+O.name+''.''+I.name+'';'' AS drop_index_statement        
+
+
+
+--   FROM        
+
+
+
+--    [sys].[indexes] I        
+
+
+
+--    INNER JOIN [sys].[objects] O ON O.[object_id] = I.[object_id]        
+
+
+
+--     AND O.type = ''U''        
+
+
+
+--     AND O.is_ms_shipped = 0        
+
+
+
+--     AND O.name <> ''sysdiagrams''        
+
+
+
+--    INNER JOIN [sys].[tables] T ON T.[object_id] = I.[object_id]        
+
+
+
+--    INNER JOIN [sys].[schemas] S ON S.[schema_id] = T.[schema_id]        
+
+
+
+--    INNER JOIN [sys].[index_columns] IC ON IC.[object_id] = I.[object_id]        
+
+
+
+--     AND IC.index_id = I.index_id        
+
+
+
+--    INNER JOIN [sys].[columns] C ON C.[object_id] = IC.[object_id]        
+
+
+
+--     AND C.column_id = IC.column_id        
+
+
+
+--   WHERE        
+
+
+
+--    I.type > 0        
+
+
+
+--    AND I.is_primary_key = 0        
+
+
+
+--    AND I.is_unique_constraint = 0        
+
+
+
+--    AND NOT EXISTS        
+
+
+
+        
+
+
+
+--     (        
+
+
+
+--      SELECT        
+
+
+
+--       *        
+
+
+
+--      FROM        
+
+
+
+--       [sys].[index_columns] XIC        
+
+
+
+--       INNER JOIN [sys].[foreign_key_columns] FKC ON FKC.parent_object_id = XIC.[object_id]        
+
+
+
+--        AND FKC.parent_column_id = XIC.column_id        
+
+
+
+--      WHERE        
+
+
+
+--       XIC.[object_id] = I.[object_id]        
+
+
+
+--       AND XIC.index_id = I.index_id        
+
+
+
+--     )        
+
+
+
+        
+
+
+
+--    AND NOT EXISTS        
+
+
+
+        
+
+
+
+--     (        
+
+
+
+--      SELECT        
+
+
+
+--       *        
+
+
+
+--      FROM        
+
+
+
+--       [master].[sys].[dm_db_index_usage_stats] IUS        
+
+
+
+--      WHERE        
+
+
+
+--       IUS.database_id = DB_ID (DB_NAME ())        
+
+
+
+--       AND IUS.[object_id] = I.[object_id]        
+
+
+
+--       AND IUS.index_id = I.index_id        
+
+
+
+--     )        
+
+
+
+--  '        
+
+
+
+        
+
+
+
+        
+
+
+
+-- EXEC (@vSQL_String)    
+
+
+
+        
+
+
+
+        
+
+
+
+-- SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name)        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF (SELECT COUNT (*) FROM dbo.#ssaj_sssr_unused_indexes_temp) = 0        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_unused_indexes        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vXML_String =        
+
+
+
+        
+
+
+
+-- CONVERT (NVARCHAR (MAX),        
+
+
+
+--  (        
+
+
+
+--   SELECT        
+
+
+
+--     '',X.database_name AS 'td'        
+
+
+
+--    ,'',X.[object_name] AS 'td'        
+
+
+
+--    ,'',X.column_name AS 'td'        
+
+
+
+--    ,'',X.index_name AS 'td'        
+
+
+
+--    ,'',X.[disabled] AS 'td'        
+
+
+
+--    ,'',X.hypothetical AS 'td'        
+
+
+
+--    ,'',X.drop_index_statement AS 'td'        
+
+
+
+--   FROM        
+
+
+
+--    dbo.#ssaj_sssr_unused_indexes_temp X        
+
+
+
+--   ORDER BY        
+
+
+
+--     X.database_name        
+
+
+
+--    ,X.[object_name]        
+
+
+
+--    ,X.column_name        
+
+
+
+--    ,X.index_name        
+
+
+
+--   FOR        
+
+
+
+--    XML PATH ('tr')        
+
+
+
+--  )        
+
+
+
+-- )        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+-- '        
+
+
+
+--  <br><br>        
+
+
+
+--  <h3><center>Unused Indexes</center></h3>        
+
+
+
+--  <center>        
+
+
+
+--   <table border=1 cellpadding=2>        
+
+
+
+--    <tr bgcolor="#8181F7">        
+
+
+
+--     <th>Database Name</th>        
+
+
+
+--     <th>Object Name</th>        
+
+
+
+--     <th>Column Name</th>        
+
+
+
+--     <th>Index Name</th>        
+
+
+
+--     <th>Disabled</th>        
+
+
+
+--     <th>Hypothetical</th>        
+
+
+
+--     <th>Drop Index Statement</th>        
+
+
+
+--    </tr>        
+
+
+
+-- '        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vBody = @vBody+@vXML_String+ 
+
+
+
+        
+
+
+
+-- '        
+
+
+
+--   </table>        
+
+
+
+--  </center>        
+
+
+
+-- '        
+
+
+
+        
+
+
+
+        
+
+
+
+--skip_unused_indexes:        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Variable Update: Finalize @vBody Variable Contents        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SET @vBody =        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <html>        
+
+
+
+   <body>        
+
+
+
+   <style type="text/css">        
+
+
+
+    table {font-size:8.0pt;font-family:Arial;text-align:left;}        
+
+
+
+    tr {text-align:left;}        
+
+
+
+   </style>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+ +@vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </body>        
+
+
+
+  </html>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = REPLACE (@vBody,'<td>right_align','<td align="right">')        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- sp_send_dbmail: Deliver Results / Notification To End User(s)        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+EXEC msdb.dbo.sp_send_dbmail        
+
+
+
+        
+
+
+
+  @recipients = @vRecipients        
+
+
+
+ ,@copy_recipients = @vCopy_Recipients        
+
+
+
+ ,@subject = @vSubject        
+
+
+
+ ,@profile_name='IT SQL DBA'        
+
+
+
+ ,@body = @vBody        
+
+
+
+ ,@body_format = 'HTML'        
+
+
+
+       
+
+
+
+  
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CREATE PROCEDURE [dbo].[usp_SQL_Server_System_Report]  
+
+
+
+        
+
+
+
+AS        
+
+
+
+        
+
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED        
+
+
+
+SET NOCOUNT ON      
+
+
+
+SET ANSI_WARNINGS ON      
+
+
+
+SET ANSI_WARNINGS ON        
+
+
+
+SET ARITHABORT OFF        
+
+
+
+SET ARITHIGNORE ON        
+
+
+
+        
+
+
+
+        
+
+
+
+DECLARE @vRecipients AS VARCHAR (MAX)        
+
+
+
+DECLARE @vCopy_Recipients AS VARCHAR (MAX)        
+
+
+
+DECLARE @vUnused_Index_Uptime_Threshold AS INT        
+
+
+
+DECLARE @vOnline_Since AS NVARCHAR (19)        
+
+
+
+DECLARE @vUptime_Days AS INT        
+
+
+
+DECLARE @vDate_24_Hours_Ago AS DATETIME        
+
+
+
+DECLARE @vDate_Now AS DATETIME        
+
+
+
+DECLARE @vSubject AS NVARCHAR (256)        
+
+
+
+DECLARE @vFixed_Drives_Free_Space_Table AS TABLE (drive VARCHAR (5),TotalSize int, FreeSpace INT,Percentage int)     
+
+
+
+DECLARE @vDatabase_Name AS NVARCHAR (500)        
+
+
+
+DECLARE @vXML_String AS NVARCHAR (MAX)        
+
+
+
+DECLARE @vBody AS NVARCHAR (MAX)        
+
+
+
+DECLARE @vSQL_String AS NVARCHAR (MAX)        
+
+
+
+    
+
+
+
+DECLARE @hr int      
+
+
+
+DECLARE @fso int      
+
+
+
+DECLARE @drive char(1)      
+
+
+
+DECLARE @odrive int      
+
+
+
+DECLARE @TotalSize varchar(20)      
+
+
+
+DECLARE @MB bigint ; SET @MB = 1048576      
+
+
+
+CREATE TABLE #drives (ServerName varchar(50),      
+
+
+
+drive char(1) PRIMARY KEY,      
+
+
+
+FreeSpace int NULL,      
+
+
+
+TotalSize int NULL,      
+
+
+
+FreespaceTimestamp DATETIME NULL)      
+
+
+
+INSERT #drives(drive,FreeSpace)      
+
+
+
+EXEC master.dbo.xp_fixeddrives      
+
+
+
+EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@fso OUT      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+DECLARE dcur CURSOR LOCAL FAST_FORWARD      
+
+
+
+FOR SELECT drive from #drives      
+
+
+
+ORDER by drive      
+
+
+
+OPEN dcur    
+
+
+
+FETCH NEXT FROM dcur INTO @drive      
+
+
+
+WHILE @@FETCH_STATUS=0      
+
+
+
+BEGIN      
+
+
+
+EXEC @hr = sp_OAMethod @fso,'GetDrive', @odrive OUT, @drive      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+EXEC @hr = sp_OAGetProperty @odrive,'TotalSize', @TotalSize OUT      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @odrive      
+
+
+
+UPDATE #drives      
+
+
+
+SET TotalSize=@TotalSize/@MB    
+
+
+
+--, ServerName = @@servername, FreespaceTimestamp = (GETDATE())      
+
+
+
+WHERE drive=@drive      
+
+
+
+FETCH NEXT FROM dcur INTO @drive      
+
+
+
+END      
+
+
+
+CLOSE dcur      
+
+
+
+DEALLOCATE dcur      
+
+
+
+EXEC @hr=sp_OADestroy @fso      
+
+
+
+IF @hr <> 0 EXEC sp_OAGetErrorInfo @fso      
+
+
+
+--insert into dbo.Disk_space_detail    
+
+
+
+insert into @vFixed_Drives_Free_Space_Table(drive,TotalSize,FreeSpace,Percentage)    
+
+
+
+SELECT --ServerName,      
+
+
+
+drive,      
+
+
+
+TotalSize as 'Total(MB)',      
+
+
+
+FreeSpace as 'Free(MB)',      
+
+
+
+CAST((FreeSpace/(TotalSize*1.0))*100.0 as int) as 'Free(%)'    
+
+
+
+--,  FreespaceTimestamp      
+
+
+
+FROM #drives      
+
+
+
+ORDER BY drive      
+
+
+
+DROP TABLE #drives    
+
+
+
+    
+
+
+
+        
+
+
+
+SET @vRecipients = 'rlife.itsqldba@relianceada.com; Mustufa.Rangwala@relianceada.com;Tushar.H.Gaikwad@relianceada.com;'  
+
+
+
+--SET @vRecipients = 'rlife.itsqldba@relianceada.com;'  
+
+
+
+SET @vCopy_Recipients = NULL        
+
+
+
+SET @vUnused_Index_Uptime_Threshold = 7        
+
+
+
+     
+
+
+
+SELECT        
+
+
+
+  @vOnline_Since = CONVERT (NVARCHAR (19), DB.create_date, 120)        
+
+
+
+ ,@vUptime_Days = DATEDIFF (DAY, DB.create_date, GETDATE ())        
+
+
+
+FROM        
+
+
+
+ [master].[sys].[databases] DB        
+
+
+
+WHERE        
+
+
+
+ DB.name = 'tempdb'        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vDate_24_Hours_Ago = GETDATE ()-1        
+
+
+
+SET @vDate_Now = @vDate_24_Hours_Ago+1        
+
+
+
+SET @vSubject = 'SQL Server System Report: '+'10.126.143.84'      
+
+
+
+SET @vXML_String = ''        
+
+
+
+SET @vBody = ''        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Error Trapping: Check If Temp Table(s) Already Exist(s) And Drop If Applicable        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL 
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query I: Server Instance Property Information        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+  
+
+
+
+Declare @AVGCPU as int    
+
+
+
+set @AVGCPU= (select AVG(convert(numeric(8,2),Total_CPU)) from [10.126.143.44].CPUGRAPH.dbo.CPU_DMV_84
+
+
+
+where DAY(Event_Time)=day(GETDATE()-1)    
+
+
+
+and DATEPART(HOUR,Event_Time) between 10 and 19  
+
+
+
+)       
+
+
+
+SELECT        
+
+
+
+  SERVERPROPERTY ('ComputerNamePhysicalNetBIOS') AS netbios_name        
+
+
+
+ ,@@SERVERNAME AS server_name        
+
+
+
+ ,REPLACE (CONVERT (NVARCHAR (128), SERVERPROPERTY ('Edition')),' Edition','') AS edition        
+
+
+
+ ,SERVERPROPERTY ('ProductVersion') AS version        
+
+
+
+ ,SERVERPROPERTY ('ProductLevel') AS [level]        
+
+
+
+ ,@vOnline_Since AS online_since        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, @vUptime_Days), 1)), 4, 15)) AS uptime_days      
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (int, @@TOTAL_READ), 1)), 4, 15)) AS reads        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (int, @@TOTAL_WRITE), 1)), 4, 15)) AS writes    
+
+
+
+ ,@AVGCPU as AverageCPU       
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_instance_property        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.netbios_name AS 'td'        
+
+
+
+    ,'',X.server_name AS 'td'        
+
+
+
+    ,'',X.edition AS 'td'        
+
+
+
+    ,'',X.version AS 'td'        
+
+
+
+    ,'',X.level AS 'td'        
+
+
+
+    ,'',X.online_since AS 'td'        
+
+
+
+    ,'','right_align'+X.uptime_days AS 'td'        
+
+
+
+    ,'','right_align'+X.reads AS 'td'        
+
+
+
+    ,'','right_align'+X.writes AS 'td'        
+
+
+
+   ,'',@AVGCPU AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_instance_property_temp X        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody =        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <h3><center>Server Instance Property Information</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>NetBIOS Name</th>        
+
+
+
+     <th>Server Name</th>        
+
+
+
+     <th>Edition</th>        
+
+
+
+     <th>Version</th>        
+
+
+
+     <th>Level</th>        
+
+
+
+     <th>Online Since</th>        
+
+
+
+     <th>Uptime Days</th>        
+
+
+
+     <th>Reads</th>        
+
+
+
+     <th>Writes</th>      
+
+
+
+     <th>AVG CPU %</th>      
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_instance_property:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_instance_property_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_instance_property_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query II: Fixed Drives Free Space        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+--INSERT INTO @vFixed_Drives_Free_Space_Table        
+
+
+
+        
+
+
+
+-- (        
+
+
+
+--   drive        
+
+
+
+--  ,free_space_mb    
+
+
+
+         
+
+
+
+-- )        
+
+
+
+        
+
+
+
+--EXEC master.dbo.xp_fixeddrives        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF @@ROWCOUNT = 0        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_fixed_drives_free_space        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.drive+':' AS 'td'        
+
+
+
+     ,'',X.Totalsize AS 'td'    
+
+
+
+     ,'',X.FreeSpace AS 'td'    
+
+
+
+     ,'',X.Percentage AS 'td'    
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+    --,'','right_align'+REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, X.free_space_mb), 1)), 4, 15)) AS 'td'        
+
+
+
+   FROM        
+
+
+
+    @vFixed_Drives_Free_Space_Table X        
+
+
+
+   ORDER BY        
+
+
+
+    X.drive        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Fixed Drives Free Space</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Drive</th>        
+
+
+
+     <th>Total Size (MB)</th>        
+
+
+
+    <th>Free Space(MB)</th>        
+
+
+
+    <th>%Free Space</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_fixed_drives_free_space:        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query III: Database Size (Summary) / Distribution Stats        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+CREATE TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+ (        
+
+
+
+   database_name NVARCHAR (500)        
+
+
+
+  ,total_size_mb NVARCHAR (15)        
+
+
+
+  ,unallocated_mb NVARCHAR (15)        
+
+
+
+  ,reserved_mb NVARCHAR (15)        
+
+
+
+  ,data_mb NVARCHAR (15)        
+
+
+
+  ,index_mb NVARCHAR (15)        
+
+
+
+  ,unused_mb NVARCHAR (15)        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name)        
+
+
+
+        
+
+
+
+        
+
+
+
+WHILE @vDatabase_Name IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ SET @vSQL_String =        
+
+
+
+        
+
+
+
+  '        
+
+
+
+   USE ['+@vDatabase_Name+'];        
+
+
+
+        
+
+
+
+        
+
+
+
+   INSERT INTO dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+   SELECT        
+
+
+
+     DB_NAME () AS database_name        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((A.total_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS total_size_mb        
+
+
+
+    ,(CASE        
+
+
+
+     WHEN A.database_size >= B.total_pages THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((A.database_size-B.total_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))        
+
+
+
+     ELSE ''0''        
+
+
+
+     END) AS unallocated_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((B.total_pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS reserved_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((B.pages*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS data_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((B.used_pages-B.pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS index_mb        
+
+
+
+    ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (((B.total_pages-B.used_pages)*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS unused_mb        
+
+
+
+   FROM        
+
+
+
+        
+
+
+
+    (        
+
+
+
+     SELECT        
+
+
+
+       SUM (CASE        
+
+
+
+        WHEN DBF.type = 0 THEN DBF.size        
+
+
+
+        ELSE 0        
+
+
+
+        END) AS database_size        
+
+
+
+      ,SUM (DBF.size) AS total_size        
+
+
+
+     FROM        
+
+
+
+      [sys].[database_files] AS DBF        
+
+
+
+     WHERE        
+
+
+
+      DBF.type IN (0,1)        
+
+
+
+    ) A        
+
+
+
+        
+
+
+
+    CROSS JOIN        
+
+
+
+        
+
+
+
+     (        
+
+
+
+      SELECT        
+
+
+
+        SUM (AU.total_pages) AS total_pages        
+
+
+
+       ,SUM (AU.used_pages) AS used_pages        
+
+
+
+       ,SUM (CASE        
+
+
+
+         WHEN IT.internal_type IN (202,204) THEN 0        
+
+
+
+         WHEN AU.type <> 1 THEN AU.used_pages        
+
+
+
+         WHEN P.index_id <= 1 THEN AU.data_pages        
+
+
+
+         ELSE 0        
+
+
+
+         END) AS pages        
+
+
+
+      FROM        
+
+
+
+       [sys].[partitions] P        
+
+
+
+       INNER JOIN [sys].[allocation_units] AU ON AU.container_id = P.partition_id        
+
+
+
+       LEFT JOIN [sys].[internal_tables] IT ON IT.[object_id] = P.[object_id]        
+
+
+
+     ) B        
+
+
+
+  '        
+
+
+
+        
+
+
+
+        
+
+
+
+ EXEC (@vSQL_String)        
+
+
+
+        
+
+
+
+        
+
+
+
+ SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name)        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+IF (SELECT COUNT (*) FROM dbo.#ssaj_sssr_database_size_distribution_stats_temp) = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_database_size_distribution_stats        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.database_name AS 'td'        
+
+
+
+    ,'','right_align'+X.total_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.unallocated_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.reserved_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.data_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.index_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.unused_mb AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_database_size_distribution_stats_temp X        
+
+
+
+   ORDER BY        
+
+
+
+    X.database_name        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Database Size (Summary) / Distribution Stats</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Total Size (MB)</th>        
+
+
+
+     <th>Unallocated (MB)</th>        
+
+
+
+     <th>Reserved (MB)</th>        
+
+
+
+     <th>Data (MB)</th>        
+
+
+
+     <th>Index (MB)</th>        
+
+
+
+     <th>Unused (MB)</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_database_size_distribution_stats:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_database_size_distribution_stats_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_database_size_distribution_stats_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query IV: Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  DB_NAME (MF.database_id) AS database_name        
+
+
+
+ ,DB.recovery_model_desc        
+
+
+
+ ,DB.compatibility_level        
+
+
+
+ ,CONVERT (NVARCHAR (10), LEFT (UPPER (MF.type_desc),1)+LOWER (SUBSTRING (MF.type_desc, 2, 250))) AS file_type        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15)) AS file_size_mb        
+
+
+
+ ,RIGHT ((CASE        
+
+
+
+    WHEN MF.growth = 0 THEN 'Fixed Size'        
+
+
+
+    WHEN MF.max_size = -1 THEN 'Unrestricted'        
+
+
+
+    WHEN MF.max_size = 0 THEN 'None'        
+
+
+
+    WHEN MF.max_size = 268435456 THEN '2 TB'        
+
+
+
+    ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.max_size*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))+' MB'        
+
+
+
+    END),15) AS max_size        
+
+
+
+ ,RIGHT ((CASE        
+
+
+
+    WHEN MF.growth = 0 THEN 'N/A'        
+
+
+
+    WHEN MF.is_percent_growth = 1 THEN REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, MF.growth), 1)), 4, 15))+' %'        
+
+
+
+    ELSE REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND ((MF.growth*CONVERT (BIGINT, 8192))/1048576.0, 0)), 1)), 4, 15))+' MB'        
+
+
+
+    END),15) AS growth_increment        
+
+
+
+ ,ROW_NUMBER () OVER        
+
+
+
+      (        
+
+
+
+       PARTITION BY        
+
+
+
+        MF.database_id        
+
+
+
+       ORDER BY        
+
+
+
+         MF.type        
+
+
+
+        ,MF.[file_id]        
+
+
+
+      ) AS database_filter_id        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+FROM        
+
+
+
+ [master].[sys].[master_files] MF        
+
+
+
+ INNER JOIN [master].[sys].[databases] DB ON DB.database_id = MF.database_id        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_model_compatibility_size_growth        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.database_name        
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.recovery_model_desc        
+
+
+
+      ELSE '' 
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN ISNULL (CONVERT (VARCHAR (5), X.compatibility_level),'N/A')        
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',X.file_type AS 'td'        
+
+
+
+    ,'','right_align'+X.file_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.max_size AS 'td'        
+
+
+
+    ,'','right_align'+X.growth_increment AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_model_compatibility_size_growth_temp X        
+
+
+
+   ORDER BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.database_filter_id        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Database Recovery Model / Compatibility / Size (Detailed) / Growth Stats</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Recovery Model</th>        
+
+
+
+ <th>Compatibility</th>        
+
+
+
+     <th>File Type</th>        
+
+
+
+     <th>File Size (MB)</th>        
+
+
+
+     <th>Max Size</th>        
+
+
+
+     <th>Growth Increment</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_model_compatibility_size_growth:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_model_compatibility_size_growth_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_model_compatibility_size_growth_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query V: Last Backup Set Details        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  BS.database_name        
+
+
+
+ ,BS.backup_set_id        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN BS.type = 'D' THEN 'Database'        
+
+
+
+  WHEN BS.type = 'F' THEN 'File Or Filegroup'        
+
+
+
+  WHEN BS.type = 'G' THEN 'Differential File'        
+
+
+
+  WHEN BS.type = 'I' THEN 'Differential Database'        
+
+
+
+  WHEN BS.type = 'L' THEN 'Log'        
+
+
+
+  WHEN BS.type = 'P' THEN 'Partial'        
+
+
+
+  WHEN BS.type = 'Q' THEN 'Differential Partial'        
+
+
+
+  ELSE 'N/A'        
+
+
+
+  END) AS backup_type        
+
+
+
+ ,CONVERT (VARCHAR (19), BS.backup_start_date, 120) AS backup_start_date        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) >= 360000 THEN '99:59:59+'        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 1 THEN '__:__:__'        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 60 THEN '__:__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  WHEN DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date) < 3600 THEN '__:'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SEC
+OND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  ELSE RIGHT ('00'+CONVERT (VARCHAR (2), (DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))/3600),2)+':'+RIGHT ('00'+CONVERT (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)/60),2)+':'+RIGHT ('00'+CONVERT
+
+
+
+
+
+
+  
+
+
+
+  
+
+
+
+  
+
+
+
+    
+
+
+
+    
+
+
+
+      
+
+
+
+ (VARCHAR (2), ((DATEDIFF (SECOND, BS.backup_start_date, BS.backup_finish_date))%3600)%60),2)        
+
+
+
+  END) AS duration        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, ROUND (BS.backup_size/1048576.0, 0)), 1)), 4, 15)) AS backup_size_mb        
+
+
+
+ ,REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, DATEDIFF (DAY, BS.backup_start_date, GETDATE ())), 1)), 4, 15)) AS days_ago        
+
+
+
+ ,ROW_NUMBER () OVER        
+
+
+
+      (        
+
+
+
+       PARTITION BY        
+
+
+
+        BS.database_name        
+
+
+
+       ORDER BY        
+
+
+
+        BS.type        
+
+
+
+      ) AS database_filter_id        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+FROM        
+
+
+
+ msdb.dbo.backupset BS        
+
+
+
+ INNER JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+    MAX (X.backup_set_id) AS backup_set_id_max        
+
+
+
+   FROM        
+
+
+
+    msdb.dbo.backupset X        
+
+
+
+   GROUP BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.type        
+
+
+
+  ) A ON A.backup_set_id_max = BS.backup_set_id        
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_last_backup_set        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',(CASE        
+
+
+
+      WHEN X.database_filter_id = 1 THEN X.database_name 
+
+
+
+      ELSE ''        
+
+
+
+      END) AS 'td'        
+
+
+
+    ,'',X.backup_set_id AS 'td'        
+
+
+
+    ,'',X.backup_type AS 'td'        
+
+
+
+    ,'',X.backup_start_date AS 'td'        
+
+
+
+    ,'',X.duration AS 'td'        
+
+
+
+    ,'','right_align'+X.backup_size_mb AS 'td'        
+
+
+
+    ,'','right_align'+X.days_ago AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_last_backup_set_temp X        
+
+
+
+   ORDER BY        
+
+
+
+     X.database_name        
+
+
+
+    ,X.database_filter_id        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>Last Backup Set Details</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Database Name</th>        
+
+
+
+     <th>Backup Set ID</th>        
+
+
+
+     <th>Backup Type</th>        
+
+
+
+     <th>Backup Start Date</th>        
+
+
+
+     <th>Duration</th>        
+
+
+
+     <th>Backup Size (MB)</th>        
+
+
+
+     <th>Days Ago</th>        
+
+
+
+    </tr>       
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_last_backup_set:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_last_backup_set_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_last_backup_set_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query VI: SQL Server Agent Jobs (Last 24 Hours)        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SELECT        
+
+
+
+  SJ.name AS job_name        
+
+
+
+ ,CONVERT (VARCHAR (19), CONVERT (DATETIME, CONVERT (VARCHAR (8), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVE
+RT (VARCHAR (6), SJH.run_time),6),2)), 120) AS last_run_date_time ,(CASE    WHEN SJH.run_status = 0 THEN 'Failed'        
+
+
+
+  WHEN SJH.run_status = 1 THEN 'Succeeded'        
+
+
+
+  WHEN SJH.run_status = 2 THEN 'Retry'        
+
+
+
+  WHEN SJH.run_status = 3 THEN 'Canceled'        
+
+
+
+  WHEN SJH.run_status = 4 THEN 'In Progress'        
+
+
+
+  END) AS last_status        
+
+
+
+ ,(CASE        
+
+
+
+  WHEN RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6) = '000000' THEN '__:__:__'        
+
+
+
+  WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),4) = '0000' THEN '__:__:'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  WHEN LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2) = '00' THEN '__:'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  ELSE LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_duration),6),2)        
+
+
+
+  END) AS duration        
+
+
+
+ ,ISNULL (CONVERT (VARCHAR (19), B.next_run_date_time, 120),'___________________') AS next_run_date_time        
+
+
+
+ ,ISNULL (REVERSE (SUBSTRING (REVERSE (CONVERT (VARCHAR (15), CONVERT (MONEY, DATEDIFF (DAY, GETDATE (), B.next_run_date_time)), 1)), 4, 15)),'N/A') AS days_away        
+
+
+
+INTO        
+
+
+
+ dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+FROM        
+
+
+
+ msdb.dbo.sysjobs SJ        
+
+
+
+ INNER JOIN msdb.dbo.sysjobhistory SJH ON SJH.job_id = SJ.job_id        
+
+
+
+  AND CONVERT (DATETIME, CONVERT (VARCHAR (8), SJH.run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJH.run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVERT (VARCHAR (6), S
+JH.run_time),6),2)) >= @vDate_24_Hours_Ago        
+
+
+
+ INNER JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+    MAX (X.instance_id) AS instance_id_max        
+
+
+
+   FROM        
+
+
+
+    msdb.dbo.sysjobhistory X        
+
+
+
+   GROUP BY        
+
+
+
+    X.job_id        
+
+
+
+  ) A ON A.instance_id_max = SJH.instance_id        
+
+
+
+        
+
+
+
+ LEFT JOIN        
+
+
+
+        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     SJS.job_id        
+
+
+
+    ,MIN (CONVERT (DATETIME, CONVERT (VARCHAR (8), SJS.next_run_date)+' '+LEFT (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),2)+':'+SUBSTRING (RIGHT ('000000'+CONVERT (VARCHAR (6), SJS.next_run_time),6),3,2)+':'+RIGHT (RIGHT ('000000'+CONVE
+RT (VARCHAR (6), SJS.next_run_time),6),2))) AS next_run_date_time  FROM  msdb.dbo.sysjobschedules SJS WHERE  SJS.next_run_date > 0        
+
+
+
+   GROUP BY        
+
+
+
+    SJS.job_id        
+
+
+
+  ) B ON B.job_id = SJ.job_id  where SJH.run_status = 0      
+
+
+
+        
+
+
+
+        
+
+
+
+IF @@ROWCOUNT = 0        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ GOTO skip_agent_jobs        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vXML_String =        
+
+
+
+        
+
+
+
+ CONVERT (NVARCHAR (MAX),        
+
+
+
+  (        
+
+
+
+   SELECT        
+
+
+
+     '',X.job_name AS 'td'        
+
+
+
+,'',X.last_run_date_time AS 'td'        
+
+
+
+    ,'',X.last_status AS 'td'        
+
+
+
+    ,'',X.duration AS 'td'     
+
+
+
+    ,'',X.next_run_date_time AS 'td'        
+
+
+
+    ,'','right_align'+X.days_away AS 'td'        
+
+
+
+   FROM        
+
+
+
+    dbo.#ssaj_sssr_agent_jobs_temp X        
+
+
+
+   ORDER BY        
+
+
+
+    X.job_name        
+
+
+
+   FOR        
+
+
+
+    XML PATH ('tr')        
+
+
+
+  )        
+
+
+
+ )        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <br><br>        
+
+
+
+  <h3><center>SQL Server Agent Jobs (Last 24 Hours)</center></h3>        
+
+
+
+  <center>        
+
+
+
+   <table border=1 cellpadding=2>        
+
+
+
+    <tr bgcolor="#8181F7">        
+
+
+
+     <th>Job Name</th>        
+
+
+
+     <th>Last Run Date / Time</th>        
+
+
+
+     <th>Last Status</th>        
+
+
+
+     <th>Duration</th>        
+
+
+
+     <th>Next Run Date / Time</th>        
+
+
+
+     <th>Days Away</th>        
+
+
+
+    </tr>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = @vBody+@vXML_String+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </table>        
+
+
+
+  </center>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+skip_agent_jobs:        
+
+
+
+        
+
+
+
+        
+
+
+
+IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_agent_jobs_temp') IS NOT NULL        
+
+
+
+BEGIN        
+
+
+
+        
+
+
+
+ DROP TABLE dbo.#ssaj_sssr_agent_jobs_temp        
+
+
+
+        
+
+
+
+END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Main Query VII: Unused Indexes        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+--IF @vUptime_Days <= @vUnused_Index_Uptime_Threshold        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_unused_indexes        
+
+
+
+        
+
+
+
+--END        
+
+
+
+      
+
+
+
+        
+
+
+
+--CREATE TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+-- (        
+
+
+
+--   database_name NVARCHAR (512)        
+
+
+
+--  ,[object_name] SYSNAME        
+
+
+
+--  ,column_name SYSNAME        
+
+
+
+--  ,index_name SYSNAME        
+
+
+
+--  ,[disabled] VARCHAR (3)        
+
+
+
+--  ,hypothetical VARCHAR (3)        
+
+
+
+--  ,drop_index_statement NVARCHAR (4000)        
+
+
+
+-- )        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL ORDER BY DB.name)        
+
+
+
+        
+
+
+
+        
+
+
+
+--WHILE @vDatabase_Name IS NOT NULL        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- SET @vSQL_String =        
+
+
+
+        
+
+
+
+--  '        
+
+
+
+--   USE ['+@vDatabase_Name+'];        
+
+
+
+        
+
+
+
+        
+
+
+
+--   INSERT INTO dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+--   SELECT        
+
+
+
+--     DB_NAME () AS database_name        
+
+
+
+--    ,O.name AS [object_name]        
+
+
+
+--    ,C.name AS column_name        
+
+
+
+--    ,I.name AS index_name        
+
+
+
+--    ,(CASE        
+
+
+
+--     WHEN I.is_disabled = 1 THEN ''Yes''        
+
+
+
+--     ELSE ''No''        
+
+
+
+--     END) AS [disabled]        
+
+
+
+--    ,(CASE        
+
+
+
+--     WHEN I.is_hypothetical = 1 THEN ''Yes''        
+
+
+
+--     ELSE ''No''        
+
+
+
+--     END) AS hypothetical        
+
+
+
+--    ,''USE ''+DB_NAME ()+''; DROP INDEX ''+S.name+''.''+O.name+''.''+I.name+'';'' AS drop_index_statement        
+
+
+
+--   FROM        
+
+
+
+--    [sys].[indexes] I        
+
+
+
+--    INNER JOIN [sys].[objects] O ON O.[object_id] = I.[object_id]        
+
+
+
+--     AND O.type = ''U''        
+
+
+
+--     AND O.is_ms_shipped = 0        
+
+
+
+--     AND O.name <> ''sysdiagrams''        
+
+
+
+--    INNER JOIN [sys].[tables] T ON T.[object_id] = I.[object_id]        
+
+
+
+--    INNER JOIN [sys].[schemas] S ON S.[schema_id] = T.[schema_id]        
+
+
+
+--    INNER JOIN [sys].[index_columns] IC ON IC.[object_id] = I.[object_id]        
+
+
+
+--     AND IC.index_id = I.index_id        
+
+
+
+--    INNER JOIN [sys].[columns] C ON C.[object_id] = IC.[object_id]        
+
+
+
+--     AND C.column_id = IC.column_id        
+
+
+
+--   WHERE        
+
+
+
+--    I.type > 0        
+
+
+
+--    AND I.is_primary_key = 0        
+
+
+
+--    AND I.is_unique_constraint = 0        
+
+
+
+--    AND NOT EXISTS        
+
+
+
+        
+
+
+
+--     (        
+
+
+
+--      SELECT        
+
+
+
+--       *        
+
+
+
+--      FROM        
+
+
+
+--       [sys].[index_columns] XIC        
+
+
+
+--       INNER JOIN [sys].[foreign_key_columns] FKC ON FKC.parent_object_id = XIC.[object_id]        
+
+
+
+--        AND FKC.parent_column_id = XIC.column_id        
+
+
+
+--      WHERE        
+
+
+
+--       XIC.[object_id] = I.[object_id]        
+
+
+
+--       AND XIC.index_id = I.index_id        
+
+
+
+--     )        
+
+
+
+        
+
+
+
+--    AND NOT EXISTS        
+
+
+
+        
+
+
+
+--     (        
+
+
+
+--      SELECT        
+
+
+
+--       *        
+
+
+
+--      FROM        
+
+
+
+--       [master].[sys].[dm_db_index_usage_stats] IUS        
+
+
+
+--      WHERE        
+
+
+
+--       IUS.database_id = DB_ID (DB_NAME ())        
+
+
+
+--       AND IUS.[object_id] = I.[object_id]        
+
+
+
+--       AND IUS.index_id = I.index_id        
+
+
+
+--     )        
+
+
+
+--  '        
+
+
+
+        
+
+
+
+        
+
+
+
+-- EXEC (@vSQL_String)    
+
+
+
+        
+
+
+
+        
+
+
+
+-- SET @vDatabase_Name = (SELECT TOP 1 DB.name FROM [master].[sys].[databases] DB WHERE DB.state = 0 AND DB.is_read_only = 0 AND DB.is_in_standby = 0 AND DB.source_database_id IS NULL AND DB.name > @vDatabase_Name ORDER BY DB.name)        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF (SELECT COUNT (*) FROM dbo.#ssaj_sssr_unused_indexes_temp) = 0        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- GOTO skip_unused_indexes        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vXML_String =        
+
+
+
+        
+
+
+
+-- CONVERT (NVARCHAR (MAX),        
+
+
+
+--  (        
+
+
+
+--   SELECT        
+
+
+
+--     '',X.database_name AS 'td'        
+
+
+
+--    ,'',X.[object_name] AS 'td'        
+
+
+
+--    ,'',X.column_name AS 'td'        
+
+
+
+--    ,'',X.index_name AS 'td'        
+
+
+
+--    ,'',X.[disabled] AS 'td'        
+
+
+
+--    ,'',X.hypothetical AS 'td'        
+
+
+
+--    ,'',X.drop_index_statement AS 'td'        
+
+
+
+--   FROM        
+
+
+
+--    dbo.#ssaj_sssr_unused_indexes_temp X        
+
+
+
+--   ORDER BY        
+
+
+
+--     X.database_name        
+
+
+
+--    ,X.[object_name]        
+
+
+
+--    ,X.column_name        
+
+
+
+--    ,X.index_name        
+
+
+
+--   FOR        
+
+
+
+--    XML PATH ('tr')        
+
+
+
+--  )        
+
+
+
+-- )        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vBody = @vBody+        
+
+
+
+        
+
+
+
+-- '        
+
+
+
+--  <br><br>        
+
+
+
+--  <h3><center>Unused Indexes</center></h3>        
+
+
+
+--  <center>        
+
+
+
+--   <table border=1 cellpadding=2>        
+
+
+
+--    <tr bgcolor="#8181F7">        
+
+
+
+--     <th>Database Name</th>        
+
+
+
+--     <th>Object Name</th>        
+
+
+
+--     <th>Column Name</th>        
+
+
+
+--     <th>Index Name</th>        
+
+
+
+--     <th>Disabled</th>        
+
+
+
+--     <th>Hypothetical</th>        
+
+
+
+--     <th>Drop Index Statement</th>        
+
+
+
+--    </tr>        
+
+
+
+-- '        
+
+
+
+        
+
+
+
+        
+
+
+
+--SET @vBody = @vBody+@vXML_String+ 
+
+
+
+        
+
+
+
+-- '        
+
+
+
+--   </table>        
+
+
+
+--  </center>        
+
+
+
+-- '        
+
+
+
+        
+
+
+
+        
+
+
+
+--skip_unused_indexes:        
+
+
+
+        
+
+
+
+        
+
+
+
+--IF OBJECT_ID ('tempdb.dbo.#ssaj_sssr_unused_indexes_temp') IS NOT NULL        
+
+
+
+--BEGIN        
+
+
+
+        
+
+
+
+-- DROP TABLE dbo.#ssaj_sssr_unused_indexes_temp        
+
+
+
+        
+
+
+
+--END        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- Variable Update: Finalize @vBody Variable Contents        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+SET @vBody =        
+
+
+
+        
+
+
+
+ '        
+
+
+
+  <html>        
+
+
+
+   <body>        
+
+
+
+   <style type="text/css">        
+
+
+
+    table {font-size:8.0pt;font-family:Arial;text-align:left;}        
+
+
+
+    tr {text-align:left;}        
+
+
+
+   </style>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+ +@vBody+        
+
+
+
+        
+
+
+
+ '        
+
+
+
+   </body>        
+
+
+
+  </html>        
+
+
+
+ '        
+
+
+
+        
+
+
+
+        
+
+
+
+SET @vBody = REPLACE (@vBody,'<td>right_align','<td align="right">')        
+
+
+
+        
+
+
+
+        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+-- sp_send_dbmail: Deliver Results / Notification To End User(s)        
+
+
+
+----------------------------------------------------------------------------------------------------------------------        
+
+
+
+        
+
+
+
+EXEC msdb.dbo.sp_send_dbmail        
+
+
+
+        
+
+
+
+  @recipients = @vRecipients        
+
+
+
+ ,@copy_recipients = @vCopy_Recipients        
+
+
+
+ ,@subject = @vSubject        
+
+
+
+ ,@profile_name='IT SQL DBA'        
+
+
+
+ ,@body = @vBody        
+
+
+
+ ,@body_format = 'HTML'        
