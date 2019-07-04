@@ -1,0 +1,46 @@
+--Listing 1. Example of cursor utilization
+
+1.  DECLARE @au_id varchar(15) 
+2.  DECLARE @au_fname varchar(15) 
+3.  DECLARE @au_lname varchar(15) 
+4.  DECLARE cur_authors CURSOR
+5.  FOR SELECT au_id, au_fname,au_lname FROM authors
+6.  OPEN cur_authors 
+7.  FETCH NEXT FROM cur_authors INTO @au_id,@au_fname,
+      @au_lname 
+8.  WHILE @@FETCH_STATUS=0  
+9. 	BEGIN 
+10.		SELECT @au_id,@au_fname,@au_lname 
+11. 		FETCH NEXT FROM cur_authors INTO @au_id,
+                 @au_fname,@au_lname 
+12. 	END 
+13. CLOSE cur_authors
+14. DEALLOCATE cur_authors
+
+
+---Listing 2. Method to replace cursor using temporary table
+1.  DECLARE @au_id char(11)
+2.  SELECT au_id, au_fname,au_lname 
+      INTO #tb_tmp_authors FROM authors
+3.  SELECT TOP 1 @au_id = au_id FROM #tb_tmp_authors
+4.  WHILE @@rowcount <> 0
+5.  BEGIN
+6. 	SELECT au_id, au_fname,au_lname 
+8. 	FROM #tb_tmp_authors WHERE au_id = @au_id
+9. 	DELETE #tb_tmp_authors WHERE au_id = @au_id
+10. 	SELECT TOP 1 @au_id = au_id FROM #tb_tmp_authors
+11. END
+12. DROP TABLE #tb_tmp_authors
+
+---Listing 3. Method to replace cursor using the Min() function
+1. DECLARE @au_id char(11)
+2. SELECT @au_id = min(au_id) from authors
+3. WHILE @au_id is not null
+4. BEGIN
+5. 	SELECT au_id, au_fname,au_lname FROM authors
+6. 	WHERE au_id = @au_id
+7. 	SELECT @au_id = min( au_id ) FROM authors 
+         WHERE au_id > @au_id
+8. END
+
+
