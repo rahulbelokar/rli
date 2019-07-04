@@ -1,0 +1,2029 @@
+USE [msdb]
+GO
+
+/****** Object:  StoredProcedure [dbo].[dba_only_success_job]    Script Date: 12/7/2018 6:41:05 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE proc [dbo].[dba_only_success_job]
+as
+
+SELECT  DISTINCT 
+SJ.NAME "Job Name",
+ sjs.step_id  "Step ID",                
+CAST(sjs.step_name AS VARCHAR(30)) AS "Step Name",
+case when len(SJS.COMMAND)>200 then 'QUERY' else SJS.COMMAND end as  "MESSAGE",
+--CAST(CONVERT(VARCHAR(20),RUN_DATE,112) AS DATETIME) AS RUNDATE,
+--CAST(CONVERT(VARCHAR(20),NEXT_RUN_DATE,112) AS DATETIME) as NEXT_RUN_DATE,			
+--count(sj.name) as jobRUNcount,
+CASE 
+WHEN RUN_STATUS=1 THEN 'SUCCEEDED' ELSE 'FAILED' end AS RUN_STATUS,
+
+CASE
+ WHEN FREQ_INTERVAL=1 and FREQ_TYPE=4 THEN 'DAILY' 
+ WHEN FREQ_TYPE=8 THEN 'WEEKLY'  
+    WHEN FREQ_TYPE=16 THEN 'MONTHLY'  
+    ELSE 'ONETIME' END AS FRQ_TYPE,
+    
+'Schedule' = CASE (SS.freq_subday_type)                
+                        WHEN 1 then   left(stuff((stuff((replicate('0', 6 - len(ss.Active_Start_Time)))+ convert(varchar(6),SS.Active_Start_Time),3,0,':')),6,0,':'),8)                
+                        WHEN 2 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' seconds'                
+                        WHEN 4 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' minutes'                
+                        WHEN 8 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' hours'                
+                        ELSE '??'                
+                      END        
+
+into #success_Jobs
+ FROM 
+ MSDB.DBO.SYSJOBS SJ  JOIN  MSDB.DBO.SYSJOBSTEPS SJS ON SJ.JOB_ID=SJS.JOB_ID 
+ JOIN    MSDB.DBO.SYSJOBHISTORY SJH ON SJ.JOB_ID = SJH.JOB_ID 
+  JOIN   MSDB.DBO.SYSJOBSCHEDULES SJD ON SJ.JOB_ID = SJD.JOB_ID   
+  JOIN   MSDB.DBO.SYSSCHEDULES  SS ON SJD.SCHEDULE_ID = SS.SCHEDULE_ID   
+ WHERE 
+RUN_STATUS IN (1) AND 
+sjh.run_date =  convert(varchar(20), GETDATE()-1, 112)  
+ --CAST(CONVERT(VARCHAR(20),RUN_DATE,112) AS DATETIME) = CAST(CONVERT(VARCHAR(20), GETDATE()-1 ,112) AS DATETIME)
+ ORDER BY  sj.name,[Step ID]
+
+declare @cnt int                      
+select @cnt=COUNT(1) from #success_Jobs 
+--print @cnt                     
+if (@cnt > 0)                    
+begin                    
+            
+declare @date varchar (20)            
+set @date =  CONVERT(DATETIME, CONVERT(VARCHAR, getdate()-1), 111)                   
+declare @strsubject varchar(100)                    
+select @strsubject='Following Job/s has/have been executed and Succeeded on ' + @@SERVERNAME  + ' ' + @date             
+            
+            
+                    
+ declare @tableHTML  nvarchar(max);                    
+ set @tableHTML =                    
+  N'<H2>Succeeded Jobs List - ' + @@SERVERNAME +'</H2>' +                    
+  N'<table border="1">' +                    
+  N'<th>Job Name</th> <th>Step ID</th>'+                    
+  N'<th>Step Name</th> <th>Message</th>' +                    
+  N'<th>RUN_STATUS</th> <th>FRQ_TYPE</th> <th>Schedule</th>              
+  </tr>' +                    
+  CAST ( ( SELECT                     
+                     td = [Job Name], '',                    
+                     td = [Step ID], '',                    
+                     td = [Step Name], '',                    
+                     --td = [Start Date Time], '',                    
+                     td = [Message],'',                  
+                     td = [RUN_STATUS], '',                
+                     td = [FRQ_TYPE], '',                  
+                     td = [Schedule], ''                
+      FROM #success_Jobs                    
+      FOR XML PATH('tr'), TYPE                     
+  ) AS NVARCHAR(MAX) ) +                    
+  N'</table>'                     
+                    
+              
+              
+                    
+EXEC msdb.dbo.sp_send_dbmail                                                                 
+         @profile_name = 'DB Alerts',                         
+                        @recipients='immanuelraja.wilson@coxandkings.com',       
+						--@copy_recipients ='abhijeet.karnik@coxandkings.com',
+                        @subject = @strsubject,                                                  
+                        @body = @tableHTML,                                                                          
+                        @body_format = 'HTML'                    
+                    
+                    
+end                    
+  if (@cnt = 0)                    
+begin        
+                   
+EXEC msdb.dbo.sp_send_dbmail                                                                 
+         @profile_name = 'DB Alerts',                         
+                        @recipients='immanuelraja.wilson@coxandkings.com;ashish.sekar@coxandkings.com',                             
+						--@copy_recipients ='abhijeet.karnik@coxandkings.com',
+                        @subject = @strsubject,                                                  
+                        @body =  'Dear All,
+
+For your information .
+ 
+      NO Jobs Succeeded today on INDIA Live Environment.
+KINDLY TAKE IMMEDIATE ACTION.
+
+Please do not reply to this mail its a system generated mail.
+
+
+Regards,
+DBA TEAM '
+      end            
+   DROP TABLE #success_Jobs                                
+   
+
+
+
+
+
+GO
+**********************************4.10am daily************************
+USE [DBA_ADMIN]
+GO
+
+/****** Object:  StoredProcedure [dbo].[DDL_CHANGE_ALERT]    Script Date: 12/7/2018 6:43:49 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROCEDURE [dbo].[DDL_CHANGE_ALERT]
+AS 
+BEGIN 
+DECLARE @LASTHOUR VARCHAR(50)
+SET		@LASTHOUR=DATEADD(MINUTE,-60,getdate()) 
+PRINT	@LASTHOUR
+
+IF EXISTS (SELECT 1 FROM DBA_ADMIN.DBO.LoggedEvents LE
+			where LE.eventtime>@LASTHOUR  
+			AND	  LE.OBJECTNAME NOT IN ('BROCHURE_mig30122011',
+'BrochureTour_Mig30122011',
+'Brochure-TourRelations_Mig30122011',
+'CancellationTable_Mig30122011',
+'CommissionTable_Mig30122011',
+'CruiseCabins_Mig30122011',
+'DepartureDates_Mig30122011',
+'DocumentChecklist_Mig30122011',
+'FlexiCostPrices_mig30122011',
+'FlexiPrices_Mig30122011',
+'FlexiPricesTTRelations_mig30122011',
+'flightcombinations1_Mig30122011',
+'FragIndex',
+'FragInfo',
+'HotelPrices_Mig30122011',
+'ImagesUsedForCover_Mig30122011',
+'InsuranceRequirements_Mig30122011',
+'Interfaced_disbursed_num',
+'Interfaced_Settled_num',
+'Package_Cities_Mig30122011',
+'PackageIncludes_Mig30122011',
+'PNRUTILIZATION_04122017',
+'PNRUTILIZATION_20171204_0723',
+'salesallocation_04122017',
+'SalesAllocation_20171204_0723',
+'SalesAllocation_Mig30122011',
+'SAP_Reco',
+'TBL_DiscountDetails_Mig30122011',
+'Tbl_FHDepartureDates_mig30122011',
+'tbl_packageAddOnMeal_mig30122011',
+'tbl_PackageAirSurfaceitinerary_mig30122011',
+'tbl_PackageDets_mig30122011',
+'tbl_PackageHotelItinerary_mig30122011',
+'tbl_PackageItineraryDescriptions_Mig30122011',
+'tbl_PackageMealItinerary_mig30122011',
+'tbl_PackageTransportSSItinerary_mig30122011',
+'TBL_PaymentMaster_Mig30122011',
+'TBL_RD_DURATIONMASTER_Mig30122011',
+'tbl_TourBestTime_Mig30122011',
+'TBL_TourPriceDetails_Mig30122011',
+'tbl_TourServiceTimings_Mig30122011',
+'tbl_UpgradeVehiclePriceDetails_Mig30122011',
+'tbl_VisaRequirements_Mig30122011',
+'Temp_Airline',
+'tempPaxList',
+'tempPaxListFinal',
+'Tour-HotelRelations_Mig30122011',
+'TourPrices_Mig30122011',
+'Tour-TourRelations_Mig30122011') 
+AND EventType NOT IN ('ALTER_INDEX'))    
+BEGIN  
+	print 'CKIS Objects chnage in Live.....'
+	DECLARE @tableHTML  NVARCHAR(MAX) ;      
+	SET @tableHTML =          
+	N'<H1 bgcolor="magenta"><CENTER>DDL Changes<CENTER></H1>' +          
+	N'<H2 bgcolor="magenta"><CENTER>Object(s) changed in last one hour<CENTER></H2>' +         
+	 N'<table border="1">' +        
+	   N'<tr bgcolor="magenta"><th>EventTime</th><th>DatabaseName</th><th>ObjectName</th><th>ObjectType</th><th>LoginName</th></tr>'+   
+	   CAST (( select 
+				TD=LE.EventTime,'', 
+				TD=LE.DatabaseName,'', 
+				TD=LE.ObjectName,'', 
+				TD=LE.ObjectType,'', 
+				TD=LE.LoginName,'' 
+	from DBA_ADMIN.DBO.LoggedEvents LE
+	WHERE LE.eventtime>@LASTHOUR
+	AND	  LE.OBJECTNAME NOT IN ('BROCHURE_mig30122011',
+'BrochureTour_Mig30122011',
+'Brochure-TourRelations_Mig30122011',
+'CancellationTable_Mig30122011',
+'CommissionTable_Mig30122011',
+'CruiseCabins_Mig30122011',
+'DepartureDates_Mig30122011',
+'DocumentChecklist_Mig30122011',
+'FlexiCostPrices_mig30122011',
+'FlexiPrices_Mig30122011',
+'FlexiPricesTTRelations_mig30122011',
+'flightcombinations1_Mig30122011',
+'FragIndex',
+'FragInfo',
+'HotelPrices_Mig30122011',
+'ImagesUsedForCover_Mig30122011',
+'InsuranceRequirements_Mig30122011',
+'Interfaced_disbursed_num',
+'Interfaced_Settled_num',
+'Package_Cities_Mig30122011',
+'PackageIncludes_Mig30122011',
+'PNRUTILIZATION_04122017',
+'PNRUTILIZATION_20171204_0723',
+'salesallocation_04122017',
+'SalesAllocation_20171204_0723',
+'SalesAllocation_Mig30122011',
+'SAP_Reco',
+'TBL_DiscountDetails_Mig30122011',
+'Tbl_FHDepartureDates_mig30122011',
+'tbl_packageAddOnMeal_mig30122011',
+'tbl_PackageAirSurfaceitinerary_mig30122011',
+'tbl_PackageDets_mig30122011',
+'tbl_PackageHotelItinerary_mig30122011',
+'tbl_PackageItineraryDescriptions_Mig30122011',
+'tbl_PackageMealItinerary_mig30122011',
+'tbl_PackageTransportSSItinerary_mig30122011',
+'TBL_PaymentMaster_Mig30122011',
+'TBL_RD_DURATIONMASTER_Mig30122011',
+'tbl_TourBestTime_Mig30122011',
+'TBL_TourPriceDetails_Mig30122011',
+'tbl_TourServiceTimings_Mig30122011',
+'tbl_UpgradeVehiclePriceDetails_Mig30122011',
+'tbl_VisaRequirements_Mig30122011',
+'Temp_Airline',
+'tempPaxList',
+'tempPaxListFinal',
+'Tour-HotelRelations_Mig30122011',
+'TourPrices_Mig30122011',
+'Tour-TourRelations_Mig30122011') 
+AND EventType NOT IN ('ALTER_INDEX')
+	FOR XML PATH('tr'), TYPE ) AS NVARCHAR(MAX))+N'</table>' 
+
+	EXEC msdb.dbo.sp_send_dbmail       
+	@recipients='abhijeet.karnik@coxandkings.com;vaishali.zope@coxandkings.com;pramod.maurya@coxandkings.com',
+		-- @recipients='dhanashri.dindore@coxandkings.com',  
+		@copy_recipients='immanuelraja.wilson@coxandkings.com;Ameya.davate@coxandkings.com;Venugopal.anumala@coxandkings.com',    
+		 @profile_name = 'DB Alerts',          
+		 @subject = '172.21.203.155 (INDIA LIVE)  : Object Change in Last 1 hour',      
+		 @body = @tableHTML,@body_format = 'HTML';      
+END 
+		
+END
+
+
+GO
+
+
+****************every 1hour*************************************
+USE [DBA_ADMIN]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Utilization_capture]    Script Date: 12/7/2018 6:46:00 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+create proc [dbo].[Utilization_capture]
+as
+Begin 
+insert into DBA_ADMIN.Dbo.utilization
+(
+Total_session ,Requests,CPU_UTILIZATION,time_stamp     
+)
+select count(spid) Total_session,
+Requests=(select count(session_id) from sys.dm_exec_requests where session_id>50),
+CPU_UTILIZATION=(SELECT top 1  CONVERT(xml, record).value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]','int') 
+                FROM sys.dm_os_ring_buffers 
+                WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'AND record LIKE '%<SystemHealth>%'),
+Time_stamp= getdate()
+from sys.sysprocesses where spid>50
+End 
+GO
+
+
+***************************every 1 hour 9am to 7pm*********
+use userdb
+if exists(SELECT top 1  1 FROM connectDBA.dbo.rpt_Ckis_db_table_rows t JOIN sys.partitions  p 
+ON ID=OBJECT_ID AND INDEX_ID<=1 AND p.ROWS<>T.ROWS)
+begin 
+
+insert into connectDBA.dbo.rpt_DMLCpature
+SELECT objname,(P.rows-T.rows) as row_diff,posttime,db_name() FROM connectDBA.dbo.rpt_Ckis_db_table_rows t JOIN sys.partitions  p 
+ON ID=OBJECT_ID AND INDEX_ID<=1 AND p.ROWS<>T.ROWS
+
+delete from connectDBA.dbo.rpt_Ckis_db_table_rows
+
+insert into connectDBA.dbo.rpt_Ckis_db_table_rows 
+select 
+p.object_id,
+OBJECT_NAME(OBJECT_ID),rows,
+getdate()
+from sys.partitions  p 
+where object_id>100 AND INDEX_ID<=1
+and object_name(object_id) not like'queue_messages%'
+ORDER BY 2
+
+end
+else 
+begin
+print 'no diff'
+
+delete from connectDBA.dbo.rpt_Ckis_db_table_rows
+
+insert into connectDBA.dbo.rpt_Ckis_db_table_rows 
+select 
+p.object_id,
+OBJECT_NAME(OBJECT_ID),rows,
+getdate()
+from sys.partitions  p 
+where object_id>100 AND INDEX_ID<=1
+and object_name(object_id) not like'queue_messages%'
+ORDER BY 2
+
+end 
+***********************every 2 min*********
+----------------------------------------------------------------------------------------------------------------------  
+-- Stored Procedure Details: Listing Of Standard Details Related To The Stored Procedure  
+----------------------------------------------------------------------------------------------------------------------  
+-- Purpose: To send alerts for fragmentation over 40 percent and index details using database mail.  
+-- Create Date: 04/03/2013  
+-- Created By: Ritesh Mandlik  
+-- Modifications: NONE  
+----------------------------------------------------------------------------------------------------------------------  
+-- Main Query: Create Procedure  
+----------------------------------------------------------------------------------------------------------------------  
+ CREATE proc [dbo].[usp_Frgmt_Details_Report_Auto]  
+as  
+-- drop and recreate the temp table used to store info from dm_db_index_physical_stats DMO  
+IF OBJECT_ID('dba_admin.dbo.FragInfo') IS NOT NULL  
+   DROP TABLE dba_admin.dbo.FragInfo;  
+CREATE TABLE dba_admin.dbo.FragInfo ([id] int identity(1,1), [db_name] SYSNAME, [table_name] SYSNAME, [index_name] SYSNAME NULL,  
+   [index_type_desc] nvarchar(60),[frag_pct] varchar(10), [page_count] bigint, [frag_count] bigint);  
+-- grab fragmentation info for every database  
+declare @FragPct varchar(10)  
+set @FragPct = 30;  
+declare @pagecount int  
+set @pagecount = 1000  
+declare @Heap varchar(10)  
+set @Heap='HEAP'  
+INSERT INTO dba_admin.dbo.FragInfo   
+SELECT DB_NAME(DB_ID()), OBJECT_NAME(ips.OBJECT_ID), i.name, ips.index_type_desc,  
+   ips.avg_fragmentation_in_percent, page_count,fragment_count  
+FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL , NULL) ips  
+INNER JOIN sys.indexes i ON i.object_id = ips.object_id AND i.index_id = ips.index_id  
+WHERE avg_fragmentation_in_percent >= + @FragPct and page_count > @pagecount and ips.index_type_desc<>@Heap order by avg_fragmentation_in_percent desc  
+--select db_name, table_name, index_name,index_type_desc, page_count, frag_count, frag_pct from #FragInfo  
+--ORDER BY frag_pct DESC;  
+declare @cmd float  
+set @cmd= (select top 1 page_count from dba_admin.dbo.FragInfo ORDER BY page_count asc)  
+if (@cmd > @pagecount )  
+  begin  
+--     print @cmd  
+--  end  
+--else  
+--  print 'no record found'  
+Declare @Body varchar(max),  
+      @TableHead varchar(max),  
+      @TableTail varchar(max)  
+Set NoCount On;  
+ Set @TableTail = '</table></body></html>';  
+Set @TableHead = '<html><head>' +   
+                  '<style>' +  
+                  'td {border: solid black 1px;padding-left:5px;padding-right:5px;padding-top:1px;padding-bottom:1px;font-size:11pt;} ' +  
+                  '</style>' +  
+                  '</head>' +  
+                  '<body><h3><center>Index Frgmentation Report Over 30 percent(Auto Rebuild-Updatestats)</center></h3><table cellpadding=0 cellspacing=0 border=0>' +  
+                   '<tr bgcolor=#FFEFD8><td align=center><b>Row No</b></td>' +  
+                   '<td align=center><b>DB Name</b></td>' +  
+                  '<td align=center><b>Table Name</b></td>' +  
+                  '<td align=center><b>Index Name</b></td>' +  
+                  '<td align=center><b>Index Type_desc</b></td>' +  
+                  '<td align=center><b>Page Count</b></td>' +  
+                  '<td align=center><b>Fragment Count</b></td>' +  
+                  '<td align=center><b>Fragmentation Percentage</b></td></tr>';  
+Select @Body = (Select Row_Number() Over(Order By id) % 2 As [TRRow],  
+         [id] [TD]  
+      , [db_name] [TD]  
+      ,[table_name] [TD]  
+      ,CASE WHEN index_name IS NULL THEN '<NULL>' ELSE  CONVERT(NVARCHAR(30), index_name) END as [TD]  
+      ,[index_type_desc] [TD]  
+       ,[page_count] [TD]  
+       ,CASE WHEN Frag_count IS NULL THEN '<NULL>' ELSE  CONVERT(NVARCHAR(30), Frag_count) END as [TD]  
+       ,[frag_pct] [TD]  
+ from dba_admin.dbo.FragInfo    
+  For XML raw('tr'), Elements)  
+-- Replace the entity codes and row numbers  
+Set @Body = Replace(@Body, '_x0020_', space(1))  
+Set @Body = Replace(@Body, '_x003D_', '=')  
+Set @Body = Replace(@Body, '<tr><TRRow>1</TRRow>', '<tr bgcolor=#C6CFFF>')  
+Set @Body = Replace(@Body, '<TRRow>0</TRRow>', '')  
+Select @Body = @TableHead + @Body + @TableTail +'<br><br><br><br><b>Regards</b>,<br>DB TEAM<br>MS SQL Server'  
+/*
+DECLARE @tabname varchar(100)
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select distinct(table_name) from dba_admin.dbo.FragInfo
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @tabname
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+EXEC ('ALTER INDEX ALL ON  ['+@tabname+'] REBUILD')
+		
+EXEC ('UPDATE STATISTICS ['+@tabname+'] with FULLSCAN')
+FETCH NEXT FROM c_Users INTO @tabname
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+*/
+  ---select * from msdb..sysmail_profile
+EXEC msdb.dbo.Sp_send_dbmail  
+@profile_name= 'DB ALERT',  
+@recipients = 'immanuelraja.wilson@coxandkings.com',  
+--@copy_recipients= 'immanuelraja.wilson@coxandkings.com',
+@body = @Body,  
+@Body_Format = 'HTML',  
+@subject = 'IND LIVE : CKIS_DB - Index Fragmentation Report over 30 percent '  
+DROP TABLE dba_admin.dbo.FragInfo;  
+end  
+else  
+print 'no record found'  
+************************7.30 am daily********
+
+use master 
+/*
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and spid>50
+and datepart(hh,login_time)<(datepart(hh,getdate())-2)
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+GO
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and spid>50
+and datepart(hh,login_time)<(datepart(hh,getdate())-1)
+and text like 'select%'
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+GO
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and spid>50
+and datepart(hh,login_time)<(datepart(hh,getdate())-2)
+and text like 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED%' 
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+GO
+
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and spid>50
+and datepart(hh,login_time)<(datepart(hh,getdate())-2)
+and text like 'sp_helptext %' 
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+GO
+*/
+DECLARE @v_spid INT
+DECLARE c_Users CURSOR
+   FAST_FORWARD FOR
+select spid from sys.sysprocesses sp
+cross apply sys.dm_exec_sql_text(sp.sql_handle) sh
+where status='sleeping' and text like '%SET TRANSACTION ISOLATION LEVEL READ COMMITTED%' and hostname = '172.21.202.21'
+and datepart(hh,login_time)<(datepart(minute,getdate())-14)
+OPEN c_Users
+FETCH NEXT FROM c_Users INTO @v_spid
+WHILE (@@FETCH_STATUS=0)
+BEGIN
+
+  EXEC('KILL '+@v_spid)
+  FETCH NEXT FROM c_Users INTO @v_spid
+END
+CLOSE c_Users
+DEALLOCATE c_Users
+GO
+
+
+****************************30 min daily****************
+
+use master 
+
+
+use tempdb
+go
+dbcc shrinkfile(templog)
+go
+dbcc shrinkfile(templog1)
+go
+dbcc shrinkfile(templog2)
+go
+dbcc shrinkfile(templog3)
+go
+
+use CKContent
+go
+dbcc shrinkfile(CKContent_log)
+go
+
+
+use CKIS_Db
+GO
+dbcc shrinkfile(CRM_log)
+go
+
+use CKISCOSTING_Db
+go
+dbcc shrinkfile(Travellex_Log)
+go
+
+
+use InterAppl_Db
+go
+dbcc shrinkfile(InterAppl_Db_Log)
+go
+
+use CNKMASTERS
+go
+dbcc shrinkfile(CNKMasters_Log)
+go
+
+use WLFIT_DB
+go
+dbcc shrinkfile(WLFIT_DB_log)
+go
+
+use DBA_ADMIN
+go
+dbcc shrinkfile(DBA_ADMIN_log)
+go
+
+**************12amdaily*********************
+
+use msdb
+
+ CREATE procedure [dbo].[serverrestart]                      
+as                       
+   DECLARE @subject VARCHAR(500)              
+          ,@body VARCHAR(8000)              
+          ,@Joboutcome VARCHAR(500)                                            
+          ,@step_id varchar(100)              
+          ,@stepName Varchar(500)              
+          ,@message Varchar(8000)              
+          ,@STATUS varchar(100)              
+          ,@SERVERName varchar(100)                                            
+Declare @HTMLBODY1 nvarchar(max)                        
+Declare @HTMLBODY2 nvarchar(max)                        
+SELECT @subject = 'ServerRestart '                                                                                
+SET @SERVERName= CONVERT(VARCHAR(25),SERVERPROPERTY('SERVERNAME'))                
+SELECT @message = message  FROM sysjobhistory WHERE job_id in (select distinct(job_id) from sysjobhistory               
+   where step_name = 'restart')                
+  --'Server CKISINTDB Restarted .'                
+   set @HTMLBODY1 = '<table class=''MyTable'' cellpadding=''0'' cellspacing=''0'' width=''800px''>'+                                            
+                                            '<caption> Server Restart Report </caption>'+                                             
+                                            '<tr><td width = 10px> JOB NAME </td><td>' + @subject + '</td>'+'</tr>'+                                            
+                                            '<td width = 10px> SERVER NAME </td><td>'+ @SERVERName +'(172.21.202.108)'+'</td>'+'</tr>'+                                            
+                                          '<tr><td width = 10px>output</td><td>'+ @message +'</td>'+'</tr>'+                                            
+                                           '</table>'                                         
+                 If(@HTMLBODY1 IS NOT NULL And @HTMLBODY1<>'')                                            
+            Begin                                            
+                  Set @HTMLBODY2 = '<HTML><HEAD><STYLE TYPE=''text/css''>' +                                            
+                              '.MyTable{width: 850px; border-right: black 1px solid; border-left: black 1px solid; border-bottom: black 1px solid;                            
+ border-top: black 1px solid; }' + '.MyTable td{width: auto; border-right: black 1px solid; border-top: black 1px solid; font-size: 0.8em;                             
+vertical-align: middle; border-left: black 1px solid; color: black; border-bottom: black 1px solid; font-family: Verdana;                            
+ background-color: White; text-align: left; height: 18px;}' +'.MyTable caption{font-size: 0.9em; color: White; font-style: normal;                      
+ font-family: Verdana; background-color: #3c6b97; border-right: black 1px solid; border-top: black 1px solid; border-left: black 1px solid;}' +                                         
+                              '.MyTable th{background-color: #95B3D7;border-style : solid;border-color : Black; border-width:1px;}' +                                            
+                              '</STYLE></HEAD><Body><br>' +                                            
+                              'Hi DBA,<BR><BR> &nbsp&nbsp  This Server Restarted Successfully.'+                      
+                              '<BR><BR>'+              
+                              '<center><Div><center>' + @HTMLBODY1 +                             
+                              '</center></Div></center> '+                             
+               '<BR><BR> This is a system-generated e-mail, please do not reply to this email.' +                                       
+                              '<BR><BR>Thanks and Regards,<BR> DBA TEAM <BR></Body></HTML>'                                            
+            End                                            
+           select @HTMLBODY2                                                                    
+ If(@HTMLBODY2 IS NOT NULL And @HTMLBODY2<>'')              
+ Begin                                                                          
+ EXEC msdb.dbo.sp_send_dbmail                                                           
+      @profile_name = 'DB alerts',        
+@recipients = 'immanuelraja.wilson@coxandkings.com',   
+--@copy_recipients ='abhijeet.karnik@coxandkings.com',
+                        @subject = @Subject,                                            
+                        @body = @HTMLBODY2,                                                                    
+                        @body_format='HTML'                       
+  End 
+
+*********************when agent start *************When server get restart this job will get execute .**********
+
+USE DBA_ADMIN
+GO
+EXEC DELETE_REG_USED_TABLES 
+GO
+EXEC DDL_OBJECT_LOG
+GO
+
+
+***********************
+CREATE PROC [dbo].[DELETE_REG_USED_TABLES]
+AS 
+BEGIN
+DELETE FROM LOGGEDEVENTS
+WHERE OBJECTNAME IN ('BROCHURE_mig30122011',
+'BrochureTour_Mig30122011',
+'Brochure-TourRelations_Mig30122011',
+'CancellationTable_Mig30122011',
+'CommissionTable_Mig30122011',
+'CruiseCabins_Mig30122011',
+'DepartureDates_Mig30122011',
+'DocumentChecklist_Mig30122011',
+'FlexiCostPrices_mig30122011',
+'FlexiPrices_Mig30122011',
+'FlexiPricesTTRelations_mig30122011',
+'flightcombinations1_Mig30122011',
+'FragIndex',
+'FragInfo',
+'HotelPrices_Mig30122011',
+'ImagesUsedForCover_Mig30122011',
+'InsuranceRequirements_Mig30122011',
+'Interfaced_disbursed_num',
+'Interfaced_Settled_num',
+'Package_Cities_Mig30122011',
+'PackageIncludes_Mig30122011',
+'PNRUTILIZATION_04122017',
+'PNRUTILIZATION_20171204_0723',
+'salesallocation_04122017',
+'SalesAllocation_20171204_0723',
+'SalesAllocation_Mig30122011',
+'SAP_Reco',
+'TBL_DiscountDetails_Mig30122011',
+'Tbl_FHDepartureDates_mig30122011',
+'tbl_packageAddOnMeal_mig30122011',
+'tbl_PackageAirSurfaceitinerary_mig30122011',
+'tbl_PackageDets_mig30122011',
+'tbl_PackageHotelItinerary_mig30122011',
+'tbl_PackageItineraryDescriptions_Mig30122011',
+'tbl_PackageMealItinerary_mig30122011',
+'tbl_PackageTransportSSItinerary_mig30122011',
+'TBL_PaymentMaster_Mig30122011',
+'TBL_RD_DURATIONMASTER_Mig30122011',
+'tbl_TourBestTime_Mig30122011',
+'TBL_TourPriceDetails_Mig30122011',
+'tbl_TourServiceTimings_Mig30122011',
+'tbl_UpgradeVehiclePriceDetails_Mig30122011',
+'tbl_VisaRequirements_Mig30122011',
+'Temp_Airline',
+'tempPaxList',
+'tempPaxListFinal',
+'Tour-HotelRelations_Mig30122011',
+'TourPrices_Mig30122011',
+'Tour-TourRelations_Mig30122011') 
+OR EventType ='ALTER_INDEX'
+OR EventType='ALTER_DATABASE'
+END
+
+***************************************
+
+CREATE PROC [dbo].[DDL_OBJECT_LOG]
+AS
+BEGIN
+Declare @subject varchar(126),@query varchar(1000) , @tab char(1),@filename varchar(60)
+set @subject='DDL Audit INDIA LIVE '+convert(varchar(6),getdate()-1,113)+'_'+convert(varchar(12),getdate(),113)
+ SET @tab = CHAR(9)
+set @query='
+set nocount on 
+select distinct 
+EventType	,
+convert(varchar(25),EventTime,113) as MODIFIEDTIME	,
+LoginName	,
+UserName	,
+ServerName	,
+DatabaseName,
+SchemaName	,
+ObjectName	,
+ObjectType	
+ FROM DBA_ADMIN.[dbo].[LoggedEvents]
+ WHERE EventTime>=getdate()-1 
+ AND Eventtype not in(''ALTER_INDEX'') 
+ AND objectname not in (''FragIndex'',''Temp_Airline'',''tempPaxList'',''tempPaxListFinal'') 
+ ORDER BY objectname
+ '
+DECLARE @Table1 as Table
+(
+EventType VARCHAR(100),
+EventTime DATETIME,
+LoginName VARCHAR(100),
+UserName VARCHAR(100),
+ServerName varchar(100),
+DatabaseName VARCHAR(100),
+SchemaName VARCHAR(100),
+ObjectName VARCHAR(100),
+ObjectType VARCHAR(100)
+)
+INSERT INTO @Table1
+EXEC (@query)
+IF EXISTS (SELECT 1 FROM @Table1) 
+BEGIN
+print @query
+set @filename= rtrim(cast(@subject as varchar(50)))+'.xls'
+execute as login = 'superuser'
+ EXEC msdb.dbo.sp_send_dbmail @profile_name = 'DB Alerts',            
+ @recipients = 'abhijeet.karnik@coxandkings.com',            
+ @copy_recipients  = 'immanuelraja.wilson@coxandkings.com',    
+ @subject = @Subject,             
+ @attach_query_result_as_file = 1,            
+ @query_result_header =1,            
+ @query_result_width=512,            
+ @query_result_separator=@tab,            
+ @query_result_no_padding=1,            
+ @Query = @query,           
+ @query_attachment_filename =@filename,
+ @body = 'Dear All,
+For your information .
+      Please Find Attached Document Containing Modified objects on INDIA LIVE environment for the mentioned time period.
+Please do not reply to this mail its a system generated mail.
+Regards,
+DBA TEAM '
+END
+IF NOT EXISTS (SELECT 1 FROM @Table1) 
+BEGIN
+execute as login = 'superuser'
+ EXEC msdb.dbo.sp_send_dbmail @profile_name = 'DB Alerts',            
+ --@recipients = 'abhijeet.karnik@coxandkings.com',            
+ @copy_recipients  = 'immanuelraja.wilson@coxandkings.com',    
+ @subject = @Subject,             
+ @body = 'Dear All,
+For your information .
+     No New / Enhanced SQL objects found on INDIA LIVE environment for the mentioned time period.
+Please do not reply to this mail its a system generated mail.
+Regards,
+DBA TEAM '
+end
+END
+
+***********************script out bellow need***
+USE [DBA_ADMIN]
+GO
+
+/****** Object:  Table [dbo].[LoggedEvents]    Script Date: 12/7/2018 7:27:17 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[LoggedEvents](
+	[EventNumber] [int] IDENTITY(1,1) NOT NULL,
+	[EventType] [nvarchar](256) NULL,
+	[EventTime] [datetime] NULL,
+	[LoginName] [sysname] NULL,
+	[UserName] [sysname] NULL,
+	[ServerName] [sysname] NULL,
+	[DatabaseName] [sysname] NULL,
+	[SchemaName] [sysname] NULL,
+	[ObjectName] [sysname] NULL,
+	[ObjectType] [sysname] NULL,
+	[TSQLCmdText] [nvarchar](max) NULL,
+PRIMARY KEY CLUSTERED 
+(
+	[EventNumber] ASC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
+) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+
+GO
+
+
+*************every day 8.5pm******************
+
+USE CKISCOSTING_DB
+go
+
+	DECLARE @i int,
+				@objectName sysname,
+				@indexName sysname,
+				@sql nvarchar(4000) ,
+				@schemaName sysname
+
+		if exists (select  * from dbo.sysobjects o where o.xtype in ('U') and o.id = object_id(N'FragIndex'))
+			DROP TABLE FragIndex;
+
+		SELECT 
+			[object_id] AS ObjectId,
+			object_name([object_id]) as TableName,	 
+			index_id AS IndexId,
+			(object_name(index_id)) as IndexName,
+			avg_fragmentation_in_percent AS FragPercent, 
+			record_count AS RecCount, 
+			index_type_desc AS IndexType
+		INTO FragIndex
+		FROM sys.dm_db_index_physical_stats (DB_ID(), null, NULL, NULL, 'sampled')
+
+
+		delete A from  FragIndex A where  not  exists 
+		(
+		select objectid from FragIndex
+		WHERE  objectid=A.objectid and indexid=A.indexid and
+			FragPercent  between 30 and 100
+			and     IndexId > 0   and recCount>5000
+		)
+
+
+		update F
+		set F.IndexName=I.name 
+		from FragIndex  F  join sys.indexes  I   on F.objectid=I.object_id and F.indexid =I.index_id
+
+
+		alter table FragIndex
+		add   FragIndexId  int IDENTITY(1, 1) 
+/*-------------------------------------------------------------------------------------------------------------------*/
+		set @schemaName='dbo'		 
+
+		select  @i=min(FragIndexId) from FragIndex
+
+		SELECT @objectName = TableName,	@indexName = IndexName	FROM FragIndex
+		  WHERE FragIndexId = @i 
+
+  WHILE @@ROWCOUNT <> 0
+	BEGIN
+
+			SET @sql = 'ALTER INDEX ['+@indexName+'] ON ['+@schemaName+'].['+@objectName+'] '+'rebuild'
+				print @sql				
+				EXEC (@SQL)
+		    SET @i = @i + 1
+
+		 SELECT @objectName = TableName,@indexName = IndexName FROM FragIndex
+			WHERE FragIndexId = @i
+
+	END
+***********every week 10 pm Rebuild all indexes having more than 5000 rows for CKIS_Db,CKISCOSTING_Db,CNKMASTERS,INTERAPPL_DB***
+
+
+
+
+
+
+USE CKIS_Db
+GO 
+
+DECLARE @DataPath nvarchar(500)
+
+SET @DataPath = 'G:\SCRIPT_BACKUP\CKIS_DB\CKIS_DB_'+convert(varchar(8),getdate(),112)
+
+EXEC master.dbo.xp_create_subdir @DataPath
+
+
+
+DECLARE @storedprocedure_name VARCHAR(100)
+DECLARE @cmd VARCHAR(4000)
+DECLARE spcursor CURSOR fast_forward FOR
+     SELECT  name  FROM   sys.objects
+  WHERE  type in('TF','IF','FN','P','V') and  schema_id = 1
+         AND is_ms_shipped = 0
+ and convert(varchar(10),modify_date,112)=convert(varchar(10),getdate(),112)
+
+
+OPEN spcursor
+
+FETCH next FROM spcursor INTO @storedprocedure_name
+
+WHILE @@fetch_status = 0
+  BEGIN
+ SET @cmd = 'bcp "exec ' + Db_name()
+                 + '.dbo.sp_GenerateScriptForStoredProcedure '
+                 + @storedprocedure_name
+                 + '" queryout  "'+@datapath+'\'
+                 + @storedprocedure_name
+                 + '.sql" -c -t, -S INTDB-DUBAI -T '
+                 
+         
+
+      EXEC master..Xp_cmdshell @cmd
+
+      FETCH next FROM spcursor INTO @storedprocedure_name
+  END
+
+CLOSE spcursor
+
+DEALLOCATE spcursor  
+
+
+**********every day 10.45 pm sp script backup**
+
+
+use master
+declare @rc int
+declare @TraceID int
+declare @maxfilesize bigint
+set @maxfilesize = 10 
+declare @dtName nvarchar(50)
+select @dtName=(N'G:\Trace_Files\DeadLockTrace'+ convert(nvarchar(8),getdate(),112))
+
+
+-- Please replace the text InsertFileNameHere, with an appropriate
+-- filename prefixed by a path, e.g., c:\MyFolder\MyTrace. The .trc extension
+-- will be appended to the filename automatically. If you are writing from
+-- remote server to local drive, please use UNC path and make sure server has
+-- write access to your network share
+
+exec @rc = sp_trace_create @TraceID output, 2, @dtName, @maxfilesize, NULL ,365
+
+if (@rc != 0) goto error
+
+-- Client side File and Table cannot be scripted
+
+-- Set the events
+declare @on bit
+set @on = 1
+exec sp_trace_setevent @TraceID, 148, 11, @on
+exec sp_trace_setevent @TraceID, 148, 51, @on
+exec sp_trace_setevent @TraceID, 148, 4, @on
+exec sp_trace_setevent @TraceID, 148, 12, @on
+exec sp_trace_setevent @TraceID, 148, 14, @on
+exec sp_trace_setevent @TraceID, 148, 26, @on
+exec sp_trace_setevent @TraceID, 148, 60, @on
+exec sp_trace_setevent @TraceID, 148, 64, @on
+exec sp_trace_setevent @TraceID, 148, 1, @on
+exec sp_trace_setevent @TraceID, 148, 41, @on
+exec sp_trace_setevent @TraceID, 25, 7, @on
+exec sp_trace_setevent @TraceID, 25, 15, @on
+exec sp_trace_setevent @TraceID, 25, 55, @on
+exec sp_trace_setevent @TraceID, 25, 8, @on
+exec sp_trace_setevent @TraceID, 25, 32, @on
+exec sp_trace_setevent @TraceID, 25, 56, @on
+exec sp_trace_setevent @TraceID, 25, 64, @on
+exec sp_trace_setevent @TraceID, 25, 1, @on
+exec sp_trace_setevent @TraceID, 25, 9, @on
+exec sp_trace_setevent @TraceID, 25, 25, @on
+exec sp_trace_setevent @TraceID, 25, 41, @on
+exec sp_trace_setevent @TraceID, 25, 49, @on
+exec sp_trace_setevent @TraceID, 25, 57, @on
+exec sp_trace_setevent @TraceID, 25, 2, @on
+exec sp_trace_setevent @TraceID, 25, 10, @on
+exec sp_trace_setevent @TraceID, 25, 26, @on
+exec sp_trace_setevent @TraceID, 25, 58, @on
+exec sp_trace_setevent @TraceID, 25, 3, @on
+exec sp_trace_setevent @TraceID, 25, 11, @on
+exec sp_trace_setevent @TraceID, 25, 35, @on
+exec sp_trace_setevent @TraceID, 25, 51, @on
+exec sp_trace_setevent @TraceID, 25, 4, @on
+exec sp_trace_setevent @TraceID, 25, 12, @on
+exec sp_trace_setevent @TraceID, 25, 52, @on
+exec sp_trace_setevent @TraceID, 25, 60, @on
+exec sp_trace_setevent @TraceID, 25, 13, @on
+exec sp_trace_setevent @TraceID, 25, 6, @on
+exec sp_trace_setevent @TraceID, 25, 14, @on
+exec sp_trace_setevent @TraceID, 25, 22, @on
+exec sp_trace_setevent @TraceID, 59, 55, @on
+exec sp_trace_setevent @TraceID, 59, 32, @on
+exec sp_trace_setevent @TraceID, 59, 56, @on
+exec sp_trace_setevent @TraceID, 59, 64, @on
+exec sp_trace_setevent @TraceID, 59, 1, @on
+exec sp_trace_setevent @TraceID, 59, 21, @on
+exec sp_trace_setevent @TraceID, 59, 25, @on
+exec sp_trace_setevent @TraceID, 59, 41, @on
+exec sp_trace_setevent @TraceID, 59, 49, @on
+exec sp_trace_setevent @TraceID, 59, 57, @on
+exec sp_trace_setevent @TraceID, 59, 2, @on
+exec sp_trace_setevent @TraceID, 59, 14, @on
+exec sp_trace_setevent @TraceID, 59, 22, @on
+exec sp_trace_setevent @TraceID, 59, 26, @on
+exec sp_trace_setevent @TraceID, 59, 58, @on
+exec sp_trace_setevent @TraceID, 59, 3, @on
+exec sp_trace_setevent @TraceID, 59, 35, @on
+exec sp_trace_setevent @TraceID, 59, 51, @on
+exec sp_trace_setevent @TraceID, 59, 4, @on
+exec sp_trace_setevent @TraceID, 59, 12, @on
+exec sp_trace_setevent @TraceID, 59, 52, @on
+exec sp_trace_setevent @TraceID, 59, 60, @on
+
+-- Set the Filters
+declare @intfilter int
+declare @bigintfilter bigint
+
+-- Set the trace status to start
+exec sp_trace_setstatus @TraceID, 1
+
+-- display trace id for future references
+
+select TraceID=@TraceID
+goto finish
+
+error: 
+select ErrorCode=@rc
+
+finish: 
+go
+
+
+
+
+*************
+********every day 10.40 am********************************************************************
+Line
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+--select * from msdb..sysmail_profile      
+CREATE procedure [dbo].[Alerts_High_CPUutilization]      
+as      
+--SET NOCOUNT       
+--ON      
+declare @ts_now bigint select @ts_now = cpu_ticks / (cpu_ticks/ms_ticks) from sys.dm_os_sys_info      
+-- Collect Data from DMV      
+select record_id, dateadd(ms, -1 * (@ts_now - [timestamp]), GetDate()) as EventTime,       
+SQLProcessUtilization,SystemIdle,100 - SystemIdle - SQLProcessUtilization as OtherProcessUtilization       
+into #tempCPURecords       
+from ( select record.value('(./Record/@id)[1]', 'int') as record_id,       
+ record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') as SystemIdle,       
+ record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') as SQLProcessUtilization,       
+ timestamp       
+ from ( select timestamp, convert(xml, record) as record       
+ from sys.dm_os_ring_buffers       
+ where ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'       
+and record like '%<SystemHealth>%') as x       
+ ) as y order by record_id desc       
+-- To send detailed sql server session reports consuming high cpu      
+-- For a dedicated SQL Server you can monitor 'SQLProcessUtilization'       
+-- if (select avg(SQLSvcUtilization) from #temp where EventTime>dateadd(mm,-5,getdate()))>=80      
+-- For a Shared SQL Server you can monitor 'SQLProcessUtilization'+'OtherOSProcessUtilization'      
+if (select avg(SQLProcessUtilization+OtherProcessUtilization)       
+from #tempCPURecords       
+where EventTime>dateadd(mm,-5,getdate()))>=75      
+begin  
+print 'CPU Alert Condition True, Sending Email..'DECLARE @tableHTML  NVARCHAR(MAX) ;      
+SET @tableHTML =          
+N'<H1 bgcolor="magenta">High CPU Utilization Reported</H1>' +          
+N'<H2 bgcolor="magenta">SQL Server Session Details</H2>' +         
+ N'<table border="1">' +        
+   N'<tr bgcolor="magenta"><th>SPID</th><th>Status</th><th>Login</th><th>Host</th><th>BlkBy</th>'+      
+   N'<th>DatabaseID</th><th>CommandType</th><th>SQLStatement</th><th>ElapsedMS</th>'+      
+   N'<th>CPUTime</th><th>IOReads</th><th>IOWrites</th><th>LastWaitType</th>'+      
+   N'<th>StartTime</th><th>Protocol</th><th>ConnectionWrites</th>'+      
+   N'<th>ConnectionReads</th><th>ClientAddress</th><th>Authentication</th></tr>'+      
+   CAST ( ( SELECT  TOP 5 -- or all by using *      
+   td= er.session_id,'',      
+   td= ses.status,'',      
+   td= ses.login_name,'',        
+   td= ses.host_name,'',         
+   td= er.blocking_session_id,'',        
+   td= er.database_id,'',        
+   td= er.command,'',        
+   td= st.text,'',       
+    td= er.total_elapsed_time,'',        
+    td= er.cpu_time,'',        
+    td= er.reads,'',        
+    td= er.writes,'',        
+    td= er.last_wait_type,'',        
+    td= er.start_time,'',       
+     td= con.net_transport,'',        
+     td= con.num_writes,'',        
+     td= con.num_reads,'',        
+     td= con.client_net_address,'',        
+     td= con.auth_scheme,''        
+     FROM sys.dm_exec_requests er  OUTER APPLY sys.dm_exec_sql_text(er.sql_handle) st        
+     LEFT JOIN sys.dm_exec_sessions ses  ON ses.session_id = er.session_id        
+     LEFT JOIN sys.dm_exec_connections con  ON con.session_id = ses.session_id        
+     WHERE er.session_id > 50        
+     ORDER BY er.cpu_time DESC ,      
+     er.blocking_session_id      
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'       
+     -- Change SQL Server Email notification code here      
+     EXEC msdb.dbo.sp_send_dbmail       
+     @recipients='immanuelraja.wilson@coxandkings.com',  
+@copy_recipients='immanuelraja.wilson@coxandkings.com',    
+     @profile_name = 'DB Alerts',          
+     @subject = '172.21.203.155 (INDIA LIVE)  :Last 5 Minutes Avg CPU Utilization Over 75%',      
+     @body = @tableHTML,@body_format = 'HTML';      
+     END      
+     -- Drop the Temporary Table      
+     --DROP Table #tempCPURecords      
+    else if (select avg(SQLProcessUtilization+OtherProcessUtilization)       
+from #tempCPURecords       
+where EventTime>dateadd(mm,-5,getdate()))>=75      
+begin  
+--print 'CPU Alert Condition True, Sending Email..'DECLARE @tableHTML  NVARCHAR(MAX) ;      
+SET @tableHTML =          
+N'<H1 bgcolor="magenta">High CPU Utilization Reported</H1>' +          
+N'<H2 bgcolor="magenta">SQL Server Session Details</H2>' +         
+ N'<table border="1">' +        
+   N'<tr bgcolor="magenta"><th>SPID</th><th>Status</th><th>Login</th><th>Host</th><th>BlkBy</th>'+      
+   N'<th>DatabaseID</th><th>CommandType</th><th>SQLStatement</th><th>ElapsedMS</th>'+      
+   N'<th>CPUTime</th><th>IOReads</th><th>IOWrites</th><th>LastWaitType</th>'+      
+   N'<th>StartTime</th><th>Protocol</th><th>ConnectionWrites</th>'+      
+   N'<th>ConnectionReads</th><th>ClientAddress</th><th>Authentication</th></tr>'+      
+   CAST ( ( SELECT  TOP 5 -- or all by using *      
+   td= er.session_id,'',      
+   td= ses.status,'',      
+   td= ses.login_name,'',        
+   td= ses.host_name,'',         
+   td= er.blocking_session_id,'',        
+   td= er.database_id,'',        
+   td= er.command,'',        
+   td= st.text,'',       
+    td= er.total_elapsed_time,'',        
+    td= er.cpu_time,'',        
+    td= er.reads,'',        
+    td= er.writes,'',        
+    td= er.last_wait_type,'',        
+    td= er.start_time,'',       
+     td= con.net_transport,'',        
+     td= con.num_writes,'',        
+     td= con.num_reads,'',        
+     td= con.client_net_address,'',        
+     td= con.auth_scheme,''        
+     FROM sys.dm_exec_requests er  OUTER APPLY sys.dm_exec_sql_text(er.sql_handle) st        
+     LEFT JOIN sys.dm_exec_sessions ses  ON ses.session_id = er.session_id        
+     LEFT JOIN sys.dm_exec_connections con  ON con.session_id = ses.session_id        
+     WHERE er.session_id > 50        
+     ORDER BY er.cpu_time DESC ,      
+     er.blocking_session_id      
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'       
+     -- Change SQL Server Email notification code here      
+     EXEC msdb.dbo.sp_send_dbmail       
+     @recipients='immanuelraja.wilson@coxandkings.com',  
+@copy_recipients='immanuelraja.wilson@coxandkings.com',   
+     @profile_name = 'DB Alerts',          
+     @subject = '172.21.203.155 (INDIA LIVE) :Last 5 Minutes Avg CPU Utilization Over 75%',      
+     @body = @tableHTML,@body_format = 'HTML';      
+     End  
+
+
+*******If Average CPU Utilization is more than 75% for last 5 Minutes, this will trigger mail.......every 15 minute***********
+
+
+
+USE [msdb]
+GO
+
+/****** Object:  StoredProcedure [dbo].[dba_only_fail_job]    Script Date: 12/7/2018 7:38:13 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE proc [dbo].[dba_only_fail_job]
+as
+
+SELECT  DISTINCT 
+SJ.NAME "Job Name",
+ sjs.step_id  "Step ID",                
+CAST(sjs.step_name AS VARCHAR(30)) AS "Step Name",
+case when len(SJS.COMMAND)>200 then 'QUERY' else SJS.COMMAND end as  "MESSAGE",
+--CAST(CONVERT(VARCHAR(20),RUN_DATE,112) AS DATETIME) AS RUNDATE,
+--CAST(CONVERT(VARCHAR(20),NEXT_RUN_DATE,112) AS DATETIME) as NEXT_RUN_DATE,			
+--count(sj.name) as jobRUNcount,
+CASE 
+WHEN RUN_STATUS=1 THEN 'SUCCEEDED' ELSE 'FAILED' end AS RUN_STATUS,
+
+CASE
+ WHEN FREQ_INTERVAL=1 and FREQ_TYPE=4 THEN 'DAILY' 
+ WHEN FREQ_TYPE=8 THEN 'WEEKLY'  
+    WHEN FREQ_TYPE=16 THEN 'MONTHLY'  
+    ELSE 'ONETIME' END AS FRQ_TYPE,
+    
+'Schedule' = CASE (SS.freq_subday_type)                
+                        WHEN 1 then   left(stuff((stuff((replicate('0', 6 - len(ss.Active_Start_Time)))+ convert(varchar(6),SS.Active_Start_Time),3,0,':')),6,0,':'),8)                
+                        WHEN 2 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' seconds'                
+                        WHEN 4 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' minutes'                
+                        WHEN 8 then 'Every ' + convert(varchar(10),SS.freq_subday_interval) + ' hours'                
+                        ELSE '??'                
+                      END        
+
+into #fail_Jobs
+ FROM 
+ MSDB.DBO.SYSJOBS SJ  JOIN  MSDB.DBO.SYSJOBSTEPS SJS ON SJ.JOB_ID=SJS.JOB_ID 
+ JOIN    MSDB.DBO.SYSJOBHISTORY SJH ON SJ.JOB_ID = SJH.JOB_ID 
+  JOIN   MSDB.DBO.SYSJOBSCHEDULES SJD ON SJ.JOB_ID = SJD.JOB_ID   
+  JOIN   MSDB.DBO.SYSSCHEDULES  SS ON SJD.SCHEDULE_ID = SS.SCHEDULE_ID   
+ WHERE 
+RUN_STATUS IN (0) AND 
+sjh.run_date =  convert(varchar(20), GETDATE()-1, 112)  
+ --CAST(CONVERT(VARCHAR(20),RUN_DATE,112) AS DATETIME) = CAST(CONVERT(VARCHAR(20), GETDATE()-1 ,112) AS DATETIME)
+ ORDER BY  sj.name,[Step ID]
+
+declare @cnt int                      
+select @cnt=COUNT(1) from #fail_Jobs
+--print @cnt                     
+if (@cnt > 0)                    
+begin                    
+            
+declare @date varchar (20)            
+set @date =  CONVERT(DATETIME, CONVERT(VARCHAR, getdate()-1), 111)                   
+declare @strsubject varchar(100)                    
+select @strsubject='Following Job/s has/have been executed and failed on ' + @@SERVERNAME  + ' ' + @date             
+            
+            
+                    
+ declare @tableHTML  nvarchar(max);                    
+ set @tableHTML =                    
+  N'<H2>Failed Jobs List - ' + @@SERVERNAME +'</H2>' +                    
+  N'<table border="1">' +                    
+  N'<th>Job Name</th> <th>Step ID</th>'+                    
+  N'<th>Step Name</th> <th>Message</th>' +                    
+  N'<th>RUN_STATUS</th> <th>FRQ_TYPE</th> <th>Schedule</th>              
+  </tr>' +                    
+  CAST ( ( SELECT                     
+                     td = [Job Name], '',                    
+                     td = [Step ID], '',                    
+                     td = [Step Name], '',                    
+                     --td = [Start Date Time], '',                    
+                     td = [Message],'',                  
+                     td = [RUN_STATUS], '',                
+                     td = [FRQ_TYPE], '',                  
+                     td = [Schedule], ''                
+      FROM #fail_Jobs                    
+      FOR XML PATH('tr'), TYPE                     
+  ) AS NVARCHAR(MAX) ) +                    
+  N'</table>'                     
+                    
+              
+              
+                    
+EXEC msdb.dbo.sp_send_dbmail                                                                 
+         @profile_name = 'DB Alerts',                         
+                        @recipients='immanuelraja.wilson@coxandkings.com;pramod.maurya@coxandkings.com',                             
+						@copy_recipients ='abhijeet.karnik@coxandkings.com',
+                        @subject = @strsubject,                                                  
+                        @body = @tableHTML,                                                                          
+                        @body_format = 'HTML'                    
+                    
+                    
+end                    
+  if (@cnt = 0)                    
+begin        
+                   
+EXEC msdb.dbo.sp_send_dbmail                                                                 
+         @profile_name = 'DB Alerts',                         
+                        @recipients='immanuelraja.wilson@coxandkings.com',                             
+          --@copy_recipients ='abhijeet.karnik@coxandkings.com',
+                        @subject = @strsubject,                                                  
+                        @body =  'Dear All,
+
+For your information .
+ 
+      NO Jobs failed today on INDIA Live Environment.
+
+Please do not reply to this mail its a system generated mail.
+
+
+Regards,
+DBA TEAM '
+      end            
+   DROP TABLE #fail_Jobs                                
+   
+
+
+
+
+
+GO
+
+
+**************************7.am daily**************
+
+
+/*        
+===================================================================================        
+FILENAME                                  :    $Logfile: $        
+VERSION                                   :    $Revision: $        
+Last Modified                             :    $Modtime: $        
+Procedure Name                            :    dbo.[nwCNK_FetchExpensiveQueries]        
+Purpose                                   :            
+Created Date                              :    06-09-2013      
+Created By                                :    Tushar R. Tupe        
+Update Date                               :    26-09-2013        
+Update By                                 :    Tushar R. Tupe        
+Tables Used                               :            
+Parameters                                :            
+Executing the proc                        :            
+Example with Parameter Values             :    EXEC [nwCNK_FetchExpensiveQueries]        
+===================================================================================        
+*/        
+CREATE PROCEDURE [dbo].[nwCNK_FetchExpensiveQueries_new]      
+AS       
+ BEGIN      
+ CREATE TABLE ##ExpensiveQueriesnew     
+   (      
+     RowID INT IDENTITY(1, 1) ,      
+     Object_Name VARCHAR(1000) ,      
+     Query_Text NVARCHAR(MAX) ,      
+     Execution_Count BIGINT ,      
+     Logical_Reads BIGINT ,      
+     Logical_Writes BIGINT ,      
+     CPU BIGINT ,      
+     Time_in_Sec BIGINT ,      
+     Last_Execution_Time DATETIME ,      
+     Status VARCHAR(100)      
+  )      
+INSERT  INTO ##ExpensiveQueriesnew     
+    ( Object_Name ,    
+Query_Text,    
+Execution_Count,    
+Logical_Reads ,    
+Logical_Writes,    
+CPU ,     
+Time_in_Sec,    
+Last_Execution_Time,    
+Status    
+)      
+      SELECT TOP 10       
+  COALESCE(QUOTENAME(OBJECT_NAME(qt.objectid, qt.dbid)),DB_NAME(CAST(pa.value AS INT))+'*...*','QUERY')  AS Object_Name ,      
+  cast(SUBSTRING(text,       
+                   CASE WHEN statement_start_offset = 0       
+                          OR statement_start_offset IS NULL        
+                           THEN 1        
+                           ELSE statement_start_offset/2 + 1 END,       
+                 CASE WHEN statement_end_offset = 0       
+                          OR statement_end_offset = -1        
+                          OR statement_end_offset IS NULL        
+                           THEN LEN(text)        
+                           ELSE statement_end_offset/2 END -       
+                     CASE WHEN statement_start_offset = 0       
+                            OR statement_start_offset IS NULL       
+                             THEN 1        
+                    ELSE statement_start_offset/2  END + 1)    
+                  AS NVARCHAR(1000))  AS [query_text]                            
+ ,qs.execution_count AS Execution_Count     
+,total_logical_reads/execution_count [Logical_Reads]    
+,total_logical_writes/execution_count [Logical_Writes]        
+,total_worker_time / execution_count  AS [CPU]      
+,(total_elapsed_time/1000000) / execution_count [Time_in_Sec]       
+,qs.last_execution_time AS Last_Execution_Time ,      
+'Expensive Queries - Logical Reads' AS Status      
+                FROM    sys.dm_exec_query_stats qs      
+                        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt      
+                        CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp      
+      OUTER APPLY sys.dm_exec_plan_attributes(qs.plan_handle) pa       
+    WHERE attribute = 'dbid'    
+              AND OBJECT_NAME(qt.objectid,qt.dbid) NOT IN (
+                                                                                    'sp_who3_new'
+                                                                                    ,'sp_whoisactive'
+          ,'nwCNK_FetchExpensiveQueries_new'
+                                                         ,'nwCNK_FetchExpensiveQueries_dump' 
+                                                                                 )
+              AND Convert(varchar(8),Last_Execution_Time,108) between '06:01:00' and '21:00:00'  
+and (total_elapsed_time/1000000) / execution_count >5  
+     ORDER BY total_logical_reads/execution_count  DESC      
+ -- Logical Reads      
+        INSERT  INTO ##ExpensiveQueriesnew     
+    ( Object_Name ,    
+Query_Text,    
+Execution_Count,    
+Logical_Reads ,    
+Logical_Writes,    
+CPU ,     
+Time_in_Sec,    
+Last_Execution_Time,    
+Status    
+)       
+                      SELECT TOP 10       
+  COALESCE(QUOTENAME(OBJECT_NAME(qt.objectid, qt.dbid)),DB_NAME(CAST(pa.value AS INT))+'*...*','QUERY')  AS Object_Name ,      
+cast(SUBSTRING(text,       
+                   CASE WHEN statement_start_offset = 0       
+                          OR statement_start_offset IS NULL        
+                           THEN 1      
+                           ELSE statement_start_offset/2 + 1 END,       
+                 CASE WHEN statement_end_offset = 0       
+                          OR statement_end_offset = -1        
+                          OR statement_end_offset IS NULL        
+                           THEN LEN(text)        
+                           ELSE statement_end_offset/2 END -       
+                     CASE WHEN statement_start_offset = 0       
+                            OR statement_start_offset IS NULL       
+                             THEN 1        
+                    ELSE statement_start_offset/2  END + 1)    
+                  AS NVARCHAR(1000))  AS [query_text]                            
+ ,qs.execution_count AS Execution_Count     
+,total_logical_reads/execution_count [Logical_Reads]    
+,total_logical_writes/execution_count [Logical_Writes]        
+,total_worker_time / execution_count  AS [CPU]      
+,(total_elapsed_time/1000000) / execution_count [Time_in_Sec]       
+,qs.last_execution_time AS Last_Execution_Time ,      
+ 'Expensive Queries - Logical Writes'      
+                FROM    sys.dm_exec_query_stats qs      
+                        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt      
+                        CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp     
+      OUTER APPLY sys.dm_exec_plan_attributes(qs.plan_handle) pa       
+       WHERE attribute = 'dbid'     
+                    AND OBJECT_NAME(qt.objectid,qt.dbid) NOT IN (
+                                                                                    'sp_who3_new'
+                                                                                    ,'sp_whoisactive'
+                                                                                    ,'nwCNK_FetchExpensiveQueries_new'
+                                                                                    ,'nwCNK_FetchExpensiveQueries_dump' 
+                                                                                 )
+                  AND   
+ Convert(varchar(8),Last_Execution_Time,108) between '06:01:00' and '21:00:00'   
+and (total_elapsed_time/1000000) / execution_count >5  
+                ORDER BY total_logical_writes/execution_count DESC      
+ -- Logical Writes      
+               INSERT  INTO ##ExpensiveQueriesnew     
+    ( Object_Name ,    
+Query_Text,    
+Execution_Count,    
+Logical_Reads ,    
+Logical_Writes,    
+CPU ,     
+Time_in_Sec,    
+Last_Execution_Time,    
+Status    
+)       
+                      SELECT TOP 15       
+  COALESCE(QUOTENAME(OBJECT_NAME(qt.objectid, qt.dbid)),DB_NAME(CAST(pa.value AS INT))+'*...*','QUERY')  AS Object_Name ,      
+cast(SUBSTRING(text,       
+                   CASE WHEN statement_start_offset = 0       
+                          OR statement_start_offset IS NULL        
+                           THEN 1        
+          ELSE statement_start_offset/2 + 1 END,       
+                 CASE WHEN statement_end_offset = 0       
+                          OR statement_end_offset = -1        
+                          OR statement_end_offset IS NULL        
+                           THEN LEN(text)        
+                           ELSE statement_end_offset/2 END -       
+                     CASE WHEN statement_start_offset = 0       
+                            OR statement_start_offset IS NULL       
+                             THEN 1        
+                    ELSE statement_start_offset/2  END + 1)    
+                  AS NVARCHAR(1000))  AS [query_text]                            
+ ,qs.execution_count AS Execution_Count     
+,total_logical_reads/execution_count [Logical_Reads]    
+,total_logical_writes/execution_count [Logical_Writes]        
+,total_worker_time / execution_count  AS [CPU]      
+,(total_elapsed_time/1000000) / execution_count [Time_in_Sec]       
+,qs.last_execution_time AS Last_Execution_Time ,      
+                        'Expensive Queries - CPU'      
+                FROM    sys.dm_exec_query_stats qs      
+                        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) qt      
+                        CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp      
+      OUTER APPLY sys.dm_exec_plan_attributes(qs.plan_handle) pa       
+             WHERE attribute = 'dbid'     
+                            AND OBJECT_NAME(qt.objectid,qt.dbid) NOT IN (
+                                                                                    'sp_who3_new'
+                                                                                    ,'sp_whoisactive'
+                                                                                    ,'nwCNK_FetchExpensiveQueries_new'
+                                                                                    ,'nwCNK_FetchExpensiveQueries_dump' 
+                                                                                 )  
+                           AND   
+ Convert(varchar(8),Last_Execution_Time,108) between '06:01:00' and '21:00:00'  
+  and (total_elapsed_time/1000000) / execution_count >5  
+      ORDER BY total_worker_time / execution_count DESC      
+ -- CPU Time      
+declare @DBMail_For varchar(100)      
+declare @body varchar(max)      
+  set @DBMail_For = 'Expensive Queries'      
+             SELECT  @Body = ( SELECT    td = CONVERT(VARCHAR(100), ROW_NUMBER() OVER ( ORDER BY RowID ASC ))      
+                                    + CHAR(10) ,      
+                                    td = ISNULL(Object_Name, 'Unknown')      
+                                    + CHAR(10) ,      
+                                    td = ISNULL(Query_Text, 'Unknown')      
+    + CHAR(10) ,      
+                                    td = ISNULL(Execution_Count, 0) ,      
+                                    td = ISNULL(Logical_Reads, 0) ,      
+                                    td = ISNULL(Logical_Writes, 0) ,      
+                                 td = ISNULL(cpu, 0) ,      
+                                    td = ISNULL(Time_in_Sec, 0) ,      
+                                    td = ISNULL(Last_Execution_Time, GETDATE()) ,      
+                                    ''      
+                          FROM      ##ExpensiveQueriesnew      
+                        FOR      
+                          XML RAW('tr') ,      
+                              ELEMENTS      
+                        )      
+  /*  Group Database Name Header  */       
+--Expensive Queries - CPU ;      
+        DECLARE @RowID VARCHAR(10) ,      
+            @Status VARCHAR(100) ,      
+            @Str1 NVARCHAR(MAX) ,      
+            @Str2 NVARCHAR(MAX)      
+        DECLARE CurCheckStatus CURSOR                  
+        FOR SELECT  CAST(MIN(RowID) AS NVARCHAR(MAX))  AS RowID ,      
+        Status      
+        FROM      ##ExpensiveQueriesnew      
+        GROUP BY Status       
+        OPEN CurCheckStatus       
+        FETCH NEXT FROM CurCheckStatus INTO  @RowID,@Status      
+        WHILE @@FETCH_STATUS = 0       
+            BEGIN       
+                 SELECT  @Str1 = '' ,      
+                        @Str2 = ''                  SELECT  @Str1 = ( SELECT    CASE WHEN RowID = @RowID      
+                                                 THEN '<td colspan="9" align="left" style= "color:#FFFFFF" bgcolor="#40668C" style="width=10%;"  ><b>'      
+                                                      + @Status + '</b></td>'      
+                                                 ELSE ''      
+                                            END      
+                                  FROM      ##ExpensiveQueriesnew      
+                                  WHERE     RowID = @RowID      
+                                FOR      
+                                  XML RAW('tr') ,      
+                                      ELEMENTS      
+                                )      
+                SELECT  @Str2 = ( SELECT    td = CONVERT(VARCHAR(100), RowID)      
+                                            + CHAR(10) ,      
+                                            td = ISNULL(Object_Name, 'Unknown')      
+                                            + CHAR(10) ,      
+                                            td = ISNULL(Query_Text, 'Unknown')      
+                                            + CHAR(10) ,      
+                                            td = ISNULL(Execution_Count, 0) ,      
+                                            td = ISNULL(Logical_Reads, 0) ,      
+                                            td = ISNULL(Logical_Writes,      
+                                                        0) ,      
+                                            td = ISNULL(CPU, 0) ,      
+                                            td = ISNULL(Time_in_SEC,      
+                                                        0) ,      
+                                            td = ISNULL(Last_Execution_Time,      
+                                                        GETDATE()) ,      
+                                            ''      
+                                  FROM      ##ExpensiveQueriesnew      
+                                  WHERE     RowID = @RowID      
+                                FOR      
+                                  XML RAW('tr') ,      
+                                      ELEMENTS      
+                                )      
+                SELECT  @Str1 = @Str1 + @Str2      
+                SELECT  @Str1 = REPLACE(@Str1, '&gt;', '>')      
+                SELECT  @Str1 = REPLACE(@Str1, '&lt;', '<')      
+             SELECT  @Body = REPLACE(@Body, @Str2, @Str1)      
+                FETCH NEXT FROM CurCheckStatus INTO  @RowID,@Status      
+            END       
+        CLOSE CurCheckStatus                            
+        DEALLOCATE CurCheckStatus      
+/*  End   */     
+  exec dba_admin.dbo.Usp_Sendmail @DBMail_For,@body       
+  DROP TABLE ##ExpensiveQueriesnew      
+END  
+
+
+
+
+
+
+************every 6 hour**1.To Find  Top 10 Expensive Queries - By CPU 
+2.To Find  Top 10 Expensive Queries - By Logical Reads
+3.To Find  Top 10 Expensive Queries - By Logical Writes*************
+
+
+
+use master
+
+CREATE TABLE ##LOGSHIPPINGSTATUS
+    (
+      RowID INT IDENTITY(1, 1)
+                PRIMARY KEY ,
+      [Primary Database] VARCHAR(2000) ,
+      [Secondary Database] VARCHAR(2000) ,
+      [Backup Time Since Last] VARCHAR(2000) ,
+      [Backup Threshold] VARCHAR(2000) ,
+      [Copied Time Since Last] VARCHAR(2000) ,
+      [Restored Time Since Last] VARCHAR(2000) ,
+      [Restored Threshold] VARCHAR(2000) ,
+      [Status] VARCHAR(2000) ,
+      [Backup LastFile] VARCHAR(2000) ,
+      [Copied LastFile] VARCHAR(2000) ,
+      [Restored LastFile] VARCHAR(2000)
+    ) 
+
+INSERT  INTO ##LOGSHIPPINGSTATUS
+        ( [Primary Database] ,
+          [Secondary Database] ,
+          [Backup Time Since Last] ,
+          [Backup Threshold] ,
+          [Copied Time Since Last] ,
+          [Restored Time Since Last] ,
+          [Restored Threshold] ,
+          [Status] ,
+          [Backup LastFile] ,
+          [Copied LastFile] ,
+          [Restored LastFile]
+        )
+        SELECT  '[' + PLS.Primary_Server + '].[' + PLS.Primary_Database + ']' AS Primary_Database ,
+                '[' + SLS.secondary_server + '].[' + SLS.secondary_database
+                + ']' AS Secondary_Database ,
+                CASE WHEN DATEDIFF(DD, 0, ( GETDATE() - PLS.last_backup_date )) <> 0
+                     THEN CAST(DATEDIFF(DD, 0,
+                                        ( GETDATE() - PLS.last_backup_date )) AS VARCHAR(100))
+                          + ' Days '
+                     ELSE ''
+                END
+                + CASE WHEN DATEPART(HH, ( GETDATE() - PLS.last_backup_date )) <> 0
+                       THEN CAST(DATEPART(HH,
+                                          ( GETDATE() - PLS.last_backup_date )) AS VARCHAR(100))
+                            + ' Hours '
+                       ELSE ''
+                  END
+                + CASE WHEN DATEPART(mi, ( GETDATE() - PLS.last_backup_date )) <> 0
+                       THEN CAST(DATEPART(mi,
+                                          ( GETDATE() - PLS.last_backup_date )) AS VARCHAR(100))
+                            + ' Min '
+                       ELSE ''
+                  END AS Backup_TSL ,
+                CASE WHEN ( PLS.backup_threshold / 60 ) >= 24
+                     THEN CAST(( PLS.backup_threshold / 60 / 24 ) AS VARCHAR(100))
+                          + ' Days '
+                     ELSE ''
+                END
+                + CASE WHEN ( PLS.backup_threshold / 60 ) < 24
+                       THEN CAST(( PLS.backup_threshold / 60 ) AS VARCHAR(100))
+                            + ' Hours '
+                       ELSE ''
+                  END
+                + CASE WHEN PLS.backup_threshold < 60
+                       THEN CAST(PLS.backup_threshold AS VARCHAR(100))
+                            + ' Min '
+                       ELSE ''
+                  END AS Backup_Threshold ,
+                CASE WHEN DATEDIFF(DD, 0, ( GETDATE() - SLS.last_copied_date )) <> 0
+                     THEN CAST(DATEDIFF(DD, 0,
+                                        ( GETDATE() - SLS.last_copied_date )) AS VARCHAR(100))
+                          + ' Days '
+                     ELSE ''
+                END
+                + CASE WHEN DATEPART(HH, ( GETDATE() - SLS.last_copied_date )) <> 0
+                       THEN CAST(DATEPART(HH,
+                                          ( GETDATE() - SLS.last_copied_date )) AS VARCHAR(100))
+                            + ' Hours '
+                       ELSE ''
+                  END
+                + CASE WHEN DATEPART(mi, ( GETDATE() - SLS.last_copied_date )) <> 0
+                       THEN CAST(DATEPART(mi,
+                                          ( GETDATE() - SLS.last_copied_date )) AS VARCHAR(100))
+                            + ' Minutes '
+                       ELSE ''
+                  END AS Copied_TSL ,
+                CASE WHEN DATEDIFF(DD, 0,
+                                   ( GETDATE() - SLS.last_restored_date )) <> 0
+                     THEN CAST(DATEDIFF(DD, 0,
+                                        ( GETDATE() - SLS.last_restored_date )) AS VARCHAR(100))
+                          + ' Days '
+                     ELSE ''
+                END
+                + CASE WHEN DATEPART(HH,
+                                     ( GETDATE() - SLS.last_restored_date )) <> 0
+                       THEN CAST(DATEPART(HH,
+                                          ( GETDATE() - SLS.last_restored_date )) AS VARCHAR(100))
+                            + ' Hours '
+                       ELSE ''
+                  END
+                + CASE WHEN DATEPART(mi,
+                                     ( GETDATE() - SLS.last_restored_date )) <> 0
+                       THEN CAST(DATEPART(mi,
+                                          ( GETDATE() - SLS.last_restored_date )) AS VARCHAR(100))
+                            + ' Minutes '
+                       ELSE ''
+                  END AS Restored_TSL ,
+                CASE WHEN ( SLS.restore_threshold / 60 ) >= 24
+                     THEN CAST(( SLS.restore_threshold / 60 / 24 ) AS VARCHAR(100))
+                          + ' Days '
+                     ELSE ''
+                END
+                + CASE WHEN ( SLS.restore_threshold / 60 ) < 24
+                       THEN CAST(( SLS.restore_threshold / 60 ) AS VARCHAR(100))
+                            + ' Hours '
+                       ELSE ''
+                  END
+                + CASE WHEN SLS.restore_threshold < 60
+                       THEN CAST(SLS.restore_threshold AS VARCHAR(100))
+                            + ' Min '
+                       ELSE ''
+                  END AS Restored_Threshold ,
+                CASE WHEN DATEDIFF(SS, last_backup_date, GETDATE()) / 60 > PLS.backup_threshold
+                     THEN 'Alert'
+                     ELSE CASE WHEN DATEDIFF(SS, SLS.last_restored_date,
+                                             GETDATE()) / 60 > SLS.restore_threshold
+                               THEN 'Alert'
+                               ELSE 'Good'
+                          END
+                END AS Status ,
+                REVERSE(SUBSTRING(REVERSE(PLS.last_backup_file), 0,
+                                  PATINDEX('%\%',
+                                           REVERSE(PLS.last_backup_file)))) AS Backup_LastFile ,
+                REVERSE(SUBSTRING(REVERSE(SLS.last_copied_file), 0,
+                                  PATINDEX('%\%',
+                                           REVERSE(SLS.last_copied_file)))) AS Copied_LastFile ,
+                REVERSE(SUBSTRING(REVERSE(SLS.last_restored_file), 0,
+                                  PATINDEX('%\%',
+                                           REVERSE(SLS.last_restored_file)))) AS Restored_LastFile
+        FROM    OPENDATASOURCE('SQLOLEDB',
+                               'Data Source= 172.21.203.155,1433;User ID= superuser;Password= 155@2012#std').msdb.dbo.log_shipping_monitor_primary PLS
+                LEFT JOIN msdb.dbo.log_shipping_monitor_secondary SLS ON PLS.Primary_Database = SLS.Secondary_Database
+
+
+
+DECLARE @Loop INT
+DECLARE @Subject VARCHAR(100)
+DECLARE @strMsg VARCHAR(4000)
+
+SELECT  @Subject = 'TRANSACTION LOG SHIPPING STATUS :'
+        + CONVERT(VARCHAR(20), GETDATE(), 100)
+
+
+DECLARE @Body NVARCHAR(MAX) ,
+    @TableHead VARCHAR(MAX) ,
+    @TableTail VARCHAR(MAX) ,
+    @TableHead2 VARCHAR(MAX) ,
+    @Body2 VARCHAR(MAX)
+SET NoCount ON ;
+
+/*		Create HTML Mail Body		*/
+
+SET @TableTail = '</table>'
+    + '<BR> *This is a system-generated e-mail, please do not reply to this email.'
+    + '<BR><BR>Thanks and Regards,<BR> DBA TEAM <BR></Body></HTML>' ;
+
+SET @TableHead = '<html><head><style>td {border: solid black 1px;padding-left:3px;padding-right:3px;padding-top:2px;padding-bottom:2px;font-size:10pt;} </style></head>
+<body><td><B>TRANSACTION LOG SHIPPING STATUS</B><hr></td>
+<td>This report shows the status of log shipping configuration.</td> 
+<BR><BR><table cellpadding=0 cellspacing=0 border=0 width="1200">  <tr style= "font:14px helvetica,arial,sans-serif">    
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97" style=""><b>Row ID</b></td>  
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Primary Database</b></td>  
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Secondary Database</b></td> 
+<td colspan="2"  align="center"  style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Backup</b></td>  
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Copy</b></td>  
+<td colspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Restore</b></td>  
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Status</b></td> 
+</tr><tr> 
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style="width=18%;"><b>Time Since Last</b></td>  
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style="width=18%;"><b>Threshold Time</b></td>  
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style="width=18%;"><b>Time Since Last</b></td>  
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style="width=60%;"><b>Time Since Last</b></td>  
+<td align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style="width=18%;"><b>Threshold Time</b></td>  </tr>'
+
+
+/*
+<!--<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Backup LastFile</b></td>  
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Copied LastFile</b></td>  
+<td rowspan="2" align="center" style= "color:#FFFFFF" bgcolor="#3c6b97"  style=""><b>Restored LastFile</b></td>--!> 
+*/
+
+SELECT  @Body = ( SELECT    td = CONVERT(VARCHAR(100), ROW_NUMBER() OVER ( ORDER BY RowID ASC ))
+                            + CHAR(10) ,
+                            td = ISNULL([Primary Database], 'Unknown')
+                            + CHAR(10) ,
+                            td = ISNULL([Secondary Database], 'Unknown')
+                            + CHAR(10) ,
+                            td = ISNULL([Backup Time Since Last], '0')
+                            + CHAR(10) ,
+                            td = ISNULL([Backup Threshold], '0') + CHAR(10) ,
+                            td = ISNULL([Copied Time Since Last], ' - ')
+                            + CHAR(10) ,
+                            td = ISNULL([Restored Time Since Last], ' - ')
+                            + CHAR(10) ,
+                            td = ISNULL([Restored Threshold], '0') + CHAR(10) ,
+                            td = ISNULL([Status], ' - ') + CHAR(10) ,
+                           /* td = ISNULL([Backup LastFile], ' - ') + CHAR(10) ,
+                            td = ISNULL([Copied LastFile], ' - ') + CHAR(10) ,
+                            td = ISNULL([Restored LastFile], ' - ') + CHAR(10) ,*/
+                            ''
+                  FROM      ##LOGSHIPPINGSTATUS
+                FOR
+                  XML RAW('tr') ,
+                      ELEMENTS
+                )
+
+
+
+/*		Replace the entity codes and row numbers	*/
+
+SET @Body = REPLACE(@Body, '_x0020_', SPACE(1))
+SET @Body = REPLACE(@Body, '_x003D_', '=')
+SET @Body = REPLACE(@Body, '<tr><TRRow>1</TRRow>', '<tr bgcolor=#C6CFFF>')
+SET @Body = REPLACE(@Body, '<TRRow>0</TRRow>', '')
+
+
+DECLARE @RowID NVARCHAR(MAX) ,
+    @Database_Name NVARCHAR(MAX) ,
+    @Str1 NVARCHAR(MAX) ,
+    @Str2 NVARCHAR(MAX) 
+
+SELECT  @Str1 = '' ,
+        @Str2 = ''
+
+SELECT  @Body = @TableHead + @Body + @TableTail
+
+EXEC msdb.dbo.sp_send_dbmail @profile_name = 'Db alerts',
+    @recipients = 'abhijeet.karnik@coxandkings.com;immanuelraja.wilson@coxandkings.com',
+    @subject = @Subject, @body = @Body, @body_format = 'HTML' ;
+
+
+DROP TABLE ##LOGSHIPPINGSTATUS
+
+
+
+/*		End			*/
+
+
+
+***every day 12 am DBA_Transaction_Log_Shipping_Status***********
+
+
+USE [msdb]
+GO
+
+/****** Object:  Trigger [dbo].[jobfailurenotify]    Script Date: 12/7/2018 7:55:18 PM  table msdb  sysjobhistory ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+                  
+CREATE  TRIGGER [dbo].[jobfailurenotify] ON [dbo].[sysjobhistory] FOR INSERT AS                                                                                               
+BEGIN                                            
+                                                           
+ Declare @HTMLBODY1 nvarchar(max)                                                     
+ Declare @HTMLBODY2 nvarchar(max)                                                 
+                                                  
+ DECLARE @failed TINYINT,@subject VARCHAR(500),@body VARCHAR(8000),@Joboutcome VARCHAR(500),                                            
+ @step_id varchar(100),@stepName Varchar(500),@message Varchar(8000),@STATUS varchar(100),@SERVERName varchar(100)                                            
+                                            
+ Select @Joboutcome = step_name from inserted where step_name ='(Job outcome)'                                             
+                                            
+ if (@Joboutcome is null)                                                                                 
+ BEGIN                                              
+                                                                                 
+ SELECT @failed = COUNT(*) from inserted                                                                                   
+ where run_status=0                                                                                   
+                                                                                  
+ IF (@failed > 0 )                                                                                  
+ BEGIN                                                                                       
+   SELECT @subject=name from msdb.dbo.sysjobs                                                                                   
+    where job_id in (select distinct(job_id) from inserted where run_status=0)                                               
+                                             
+    select @step_id=Step_id,@stepName=Step_name,@message=Message from inserted where run_status=0                                                                                   
+                                            
+   SET @STATUS = 'Staus : The step failed on ' + CONVERT(VARCHAR(25),GETDATE())                                            
+   SET @SERVERName= CONVERT(VARCHAR(25),SERVERPROPERTY('SERVERNAME'))                                                                                    
+   SET @StepName =@stepName                                              
+                               
+   insert into Job_failure
+   (
+   jobid ,
+  run_status ,
+  run_date ,
+  run_time,
+  posttime
+   )  
+ select job_id,run_status,run_date,run_time,getdate()
+ from inserted where run_status=0                                                                            
+                                                          
+   set @HTMLBODY1 = '<table class=''MyTable'' cellpadding=''0'' cellspacing=''0'' width=''800px''>'+                                            
+                                          '<caption>  Job Failure Report </caption>'+                                             
+                                          '<tr><td width = 10px> JOB NAME </td><td>' + @subject + '</td>'+'</tr>'+                                            
+                                          '<td width = 10px> SERVER NAME </td><td>'+ @SERVERName +'(172.21.203.155) </td>'+                                            
+                                          '</tr>'+                                           
+                                          '<tr><td width = 10px>STATUS</td><td >'+ @STATUS +'</td>'+'</tr>'+                                            
+                                          '<td width = 10px>STEP ID</td><td>'+ @step_id +'</td>'+                                            
+                                          '</tr>'+                                            
+                '<tr><td width = 10px>STEP NAME</td><td>'+ @stepName +'</td>'+'</tr>'+                                            
+          '<tr><td width = 10px>ERROR</td><td>'+ @message +'</td>'+'</tr>'+                                      
+                                          '</table>'                                                    
+                            
+                   
+                                            
+            If(@HTMLBODY1 IS NOT NULL And @HTMLBODY1<>'')                                            
+            Begin                                            
+                                           
+                  Set @HTMLBODY2 = '<HTML><HEAD><STYLE TYPE=''text/css''>' +                                            
+                              '.MyTable{width: 850px; border-right: black 1px solid; border-left: black 1px solid; border-bottom: black 1px solid;                            
+ border-top: black 1px solid; }' + '.MyTable td{width: auto; border-right: black 1px solid; border-top: black 1px solid; font-size: 0.8em;                             
+vertical-align: middle; border-left: black 1px solid; color: black; border-bottom: black 1px solid; font-family: Verdana;                            
+ background-color: White; text-align: left; height: 18px;}' +'.MyTable caption{font-size: 0.9em; color: White; font-style: normal;                       
+font-family: Verdana; background-color: #3c6b97; border-right: black 1px solid; border-top: black 1px solid; border-left: black 1px solid;}' +                                         
+                              
+                               
+                              '.MyTable th{background-color: #95B3D7;border-style : solid;border-color : Black; border-width:1px;}' +                                            
+                              '</STYLE></HEAD><Body><br>' +                                            
+                              'Hi DBA,<BR><BR> &nbsp&nbsp Kindly Check This Job.'+                                           
+                              '<BR><BR>'+                                            
+                              '<center><Div><center>' + @HTMLBODY1 +                                             
+                              '</center></Div></center> '+                                            
+                                                                     
+                              '<BR><BR> This is a system-generated e-mail, please do not reply to this email.' +                                             
+                              '<BR><BR>Thanks and Regards,<BR> DBA TEAM <BR></Body></HTML>'                                            
+            End                                            
+                                            
+           select @HTMLBODY2                                                                    
+                                                                          
+            If(@HTMLBODY2 IS NOT NULL And @HTMLBODY2<>'')                                            
+            Begin                                            
+                        EXEC msdb.dbo.sp_send_dbmail                                                           
+                        @profile_name = 'DB ALERT',                                                                                  
+                        @recipients='immanuelraja.wilson@coxandkings.com;venugopal.anumala@coxandkings.com;pramod.maurya@coxandkings.com',                      
+                        @copy_recipients ='abhijeet.karnik@coxandkings.com', 
+                        @subject = @Subject,                                            
+                        @body = @HTMLBODY2,                                                                    
+                        @body_format = 'HTML'              
+                                                                    
+--                        Insert into DBAJobHistory(Servername,JobName,StepID,StepName,JobError)                                                 
+--      select  CONVERT(VARCHAR(25),SERVERPROPERTY('SERVERNAME')) Servername, @subject JobName,                                                 
+--      Step_id StepID ,Step_name StepName, message JobError from inserted where run_status=0                                              
+                                            
+            End                             
+       End                                            
+    END                                            
+END 
+
+
+
+GO
+
+
+*********need create tabel ***
+USE [msdb]
+GO
+
+/****** Object:  Table [dbo].[Job_failure]    Script Date: 12/7/2018 7:57:53 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[Job_failure](
+	[id] [int] IDENTITY(1,1) NOT NULL,
+	[jobid] [uniqueidentifier] NULL,
+	[run_status] [int] NULL,
+	[run_date] [int] NULL,
+	[run_time] [int] NULL,
+	[posttime] [datetime] NULL
+) ON [PRIMARY]
+
+GO
+
+
+********************************************************************
+DECLARE @RecCount INT
+
+CREATE TABLE #TempCKIS_QLK_AccCashRcptLac()
+INSERT INTO	#TempCKIS_QLK_AccCashRcptLac
+()EXEC ckis_db.dbo.nwCNK_Account_CashReceipt_AboveLac	 @FromDt ='20160401' ,@ToDt ='20250401'
+SELECT  @RecCount = COUNT(1)
+			FROM    #TempCKIS_QLK_AccCashRcptLac
+IF @RecCount>0
+
+BEGIN 
+TRUNCATE TABLE ARCHIVEDB.DBO.CKIS_QLK_AccCashRcptLac
+
+INSERT INTO ARCHIVEDB.DBO.CKIS_QLK_AccCashRcptLac
+SELECT * FROM #TempCKIS_QLK_AccCashRcptLac
+
+DROP TABLE #TempCKIS_QLK_AccCashRcptLac
+END
+
+ELSE
+BEGIN
+Print 'No Records Inserted'
+DROP TABLE #TempCKIS_QLK_AccCashRcptLac
+END
+************automated table migration************
+
+
+
+
+ 
