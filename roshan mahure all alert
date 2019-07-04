@@ -1,0 +1,550 @@
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Alert_low_memory]    Script Date: 11/22/2016 7:55:11 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+CREATE proc [dbo].[Alert_low_memory]    
+as    
+ 
+if    
+(SELECT top 1 (available_physical_memory_kb)/(1024) 
+FROM TempTables_47..memory_alert   
+where  (available_physical_memory_kb/1024)<512
+and date_time >= DATEADD(mi, -10, GETDATE()))>=1
+
+--and DATEDIFF(n,date_time,getdate())>5)>=1   
+begin    
+  EXEC msdb.dbo.sp_send_dbmail               
+     --@recipients='Rlife.itsqldba@relianceada.com;abhijit.shedulkar@cloverinfotech.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;',              
+     @recipients='Rlife.itsqldba@relianceada.com;',              
+     @profile_name = 'IT SQL DBA',                  
+     @subject = '10.126.143.47 :Memory less than 512 MB since last 10 mins',              
+     @body ='10.126.143.47 :Memory less than 512 MB since last 10 mins';              
+ end
+
+
+
+
+
+GO
+
+------------------------------------------------------------------------------------------------------------------------
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Alerts_Blocking_New]    Script Date: 11/22/2016 7:55:38 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+--select * from msdb..sysmail_profile                        
+CREATE procedure [dbo].[Alerts_Blocking_New]                
+as                       
+DECLARE @tableHTML  NVARCHAR(MAX)          
+if(          
+SELECT COUNT(1)FROM sys.dm_exec_requests blocked_query          
+JOIN sys.dm_exec_requests blocking_query ON blocked_query.blocking_session_id = blocking_query.session_id          
+CROSS APPLY          
+(          
+SELECT *FROM sys.dm_exec_sql_text(blocking_query.sql_handle)          
+) sql_text          
+JOIN sys.dm_os_waiting_tasks waits ON          
+waits.session_id = blocking_query.session_id where DATEDIFF(n,blocked_query.start_time,getdate())>5)>=1          
+begin                   
+print 'CPU Alert Condition True, Sending Email..'                       
+SET @tableHTML =                            
+N'<H1 bgcolor="Yellow">Blocking Query Details</H1>' +                            
+N'<H2 bgcolor="Yellow">Query Details</H2>' +                           
+ N'<table border="1">' +                          
+   N'<tr bgcolor="Yellow"><th>Database_Name</th><th>blocked_session_id</th><th>blocking_session_id</th><th>blocked_Query</th><th>blocking_Query</th><th>WaitType</th><th>Blocked_StartTime</th>'+                        
+   CAST ((          
+   SELECT           
+td=DB_NAME(blocked_query.database_id),'',          
+td=blocked_query.session_id,'',          
+td=blocking_query.session_id,'',          
+td=sql_text.text,'',          
+td=sql_text2.text,'',          
+td=waits.wait_type,'',          
+td=blocked_query.start_time,''          
+FROM sys.dm_exec_requests blocked_query          
+JOIN sys.dm_exec_requests blocking_query ON          
+blocked_query.blocking_session_id = blocking_query.session_id          
+CROSS APPLY sys.dm_exec_sql_text(blocked_query.sql_handle) AS sql_text          
+CROSS APPLY sys.dm_exec_sql_text(blocking_query.sql_handle) AS sql_text2          
+JOIN sys.dm_os_waiting_tasks waits ON          
+waits.session_id = blocking_query.session_id where DATEDIFF(n,blocked_query.start_time,getdate())>5          
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'                         
+     -- Change SQL Server Email notification code here                        
+     EXEC msdb.dbo.sp_send_dbmail                         
+    @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;younus.dalvi@cloverinfotech.com;',                        
+ ---@recipients='Rlife.itsqldba@relianceada.com;younus.dalvi@cloverinfotech.com',                        
+     @profile_name = 'IT SQL DBA',                            
+     @subject = 'BLocking Query on 10.126.143.47 server since last 5 min',                        
+     @body = @tableHTML,@body_format = 'HTML';          
+     end
+
+
+GO
+
+---------------------------------------------------------------------------------------------------------------------
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Alerts_High_CPUutilization]    Script Date: 11/22/2016 7:55:55 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+
+--select * from msdb..sysmail_profile        
+CREATE procedure [dbo].[Alerts_High_CPUutilization]        
+as        
+--SET NOCOUNT         
+--ON        
+declare @ts_now bigint select @ts_now = cpu_ticks / (cpu_ticks/ms_ticks) from sys.dm_os_sys_info        
+-- Collect Data from DMV        
+select record_id, dateadd(ms, -1 * (@ts_now - [timestamp]), GetDate()) as EventTime,         
+SQLProcessUtilization,SystemIdle,100 - SystemIdle - SQLProcessUtilization as OtherProcessUtilization         
+into #tempCPURecords         
+from ( select record.value('(./Record/@id)[1]', 'int') as record_id,         
+ record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int') as SystemIdle,         
+ record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int') as SQLProcessUtilization,         
+ timestamp         
+ from ( select timestamp, convert(xml, record) as record         
+ from sys.dm_os_ring_buffers         
+ where ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'         
+and record like '%<SystemHealth>%') as x         
+ ) as y order by record_id desc         
+-- To send detailed sql server session reports consuming high cpu        
+-- For a dedicated SQL Server you can monitor 'SQLProcessUtilization'         
+-- if (select avg(SQLSvcUtilization) from #temp where EventTime>dateadd(mm,-5,getdate()))>=80        
+-- For a Shared SQL Server you can monitor 'SQLProcessUtilization'+'OtherOSProcessUtilization'        
+if (select avg(SQLProcessUtilization+OtherProcessUtilization)         
+from #tempCPURecords         
+where EventTime>dateadd(mm,-5,getdate()))>=90       
+begin    
+print 'CPU Alert Condition True, Sending Email..'DECLARE @tableHTML  NVARCHAR(MAX) ;        
+SET @tableHTML =            
+N'<H1 bgcolor="magenta">High CPU Utilization Reported</H1>' +            
+N'<H2 bgcolor="magenta">SQL Server Session Details</H2>' +           
+ N'<table border="1">' +          
+   N'<tr bgcolor="magenta"><th>SPID</th><th>Status</th><th>Login</th><th>Host</th><th>BlkBy</th>'+        
+   N'<th>DatabaseID</th><th>CommandType</th><th>SQLStatement</th><th>ElapsedMS</th>'+        
+   N'<th>CPUTime</th><th>IOReads</th><th>IOWrites</th><th>LastWaitType</th>'+        
+   N'<th>StartTime</th><th>Protocol</th><th>ConnectionWrites</th>'+        
+   N'<th>ConnectionReads</th><th>ClientAddress</th><th>Authentication</th></tr>'+        
+   CAST ( ( SELECT  TOP 5 -- or all by using *        
+   td= er.session_id,'',        
+   td= ses.status,'',        
+   td= ses.login_name,'',          
+   td= ses.host_name,'',           
+   td= er.blocking_session_id,'',          
+   td= er.database_id,'',          
+   td= er.command,'',          
+   td= st.text,'',         
+    td= er.total_elapsed_time,'',          
+    td= er.cpu_time,'',          
+    td= er.reads,'',          
+    td= er.writes,'',          
+    td= er.last_wait_type,'',          
+    td= er.start_time,'',         
+     td= con.net_transport,'',          
+     td= con.num_writes,'',          
+     td= con.num_reads,'',          
+     td= con.client_net_address,'',          
+     td= con.auth_scheme,''          
+     FROM sys.dm_exec_requests er  OUTER APPLY sys.dm_exec_sql_text(er.sql_handle) st          
+     LEFT JOIN sys.dm_exec_sessions ses  ON ses.session_id = er.session_id          
+     LEFT JOIN sys.dm_exec_connections con  ON con.session_id = ses.session_id          
+     WHERE er.session_id > 50          
+     ORDER BY er.cpu_time DESC ,        
+     er.blocking_session_id        
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'         
+     -- Change SQL Server Email notification code here        
+     EXEC msdb.dbo.sp_send_dbmail
+     @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;younus.dalvi@cloverinfotech.com;Sachin.Y.Jadhav@relianceada.com',
+     --@recipients='Rlife.itsqldba@relianceada.com;younus.dalvi@cloverinfotech.com;',
+     @profile_name = 'IT SQL DBA New',
+     @subject = '10.126.143.47 :Last 5 Minutes Avg CPU Utilization Over 90%',
+     @body = @tableHTML,@body_format = 'HTML';
+     END        
+     -- Drop the Temporary Table        
+     --DROP Table #tempCPURecords        
+             
+    else if (select avg(SQLProcessUtilization+OtherProcessUtilization)         
+from #tempCPURecords         
+where EventTime>dateadd(mm,-5,getdate()))>=75
+begin    
+--print 'CPU Alert Condition True, Sending Email..'DECLARE @tableHTML  NVARCHAR(MAX) ;        
+SET @tableHTML =            
+N'<H1 bgcolor="magenta">High CPU Utilization Reported</H1>' +            
+N'<H2 bgcolor="magenta">SQL Server Session Details</H2>' +           
+ N'<table border="1">' +          
+   N'<tr bgcolor="magenta"><th>SPID</th><th>Status</th><th>Login</th><th>Host</th><th>BlkBy</th>'+        
+   N'<th>DatabaseID</th><th>CommandType</th><th>SQLStatement</th><th>ElapsedMS</th>'+        
+   N'<th>CPUTime</th><th>IOReads</th><th>IOWrites</th><th>LastWaitType</th>'+        
+   N'<th>StartTime</th><th>Protocol</th><th>ConnectionWrites</th>'+        
+   N'<th>ConnectionReads</th><th>ClientAddress</th><th>Authentication</th></tr>'+        
+   CAST ( ( SELECT  TOP 5 -- or all by using *        
+   td= er.session_id,'',        
+   td= ses.status,'',        
+   td= ses.login_name,'',          
+   td= ses.host_name,'',           
+   td= er.blocking_session_id,'',          
+   td= er.database_id,'',          
+   td= er.command,'',          
+   td= st.text,'',         
+    td= er.total_elapsed_time,'',          
+    td= er.cpu_time,'',          
+    td= er.reads,'',          
+    td= er.writes,'',          
+    td= er.last_wait_type,'',          
+    td= er.start_time,'',         
+     td= con.net_transport,'',          
+     td= con.num_writes,'',          
+     td= con.num_reads,'',          
+     td= con.client_net_address,'',          
+     td= con.auth_scheme,''          
+     FROM sys.dm_exec_requests er  OUTER APPLY sys.dm_exec_sql_text(er.sql_handle) st          
+     LEFT JOIN sys.dm_exec_sessions ses  ON ses.session_id = er.session_id          
+     LEFT JOIN sys.dm_exec_connections con  ON con.session_id = ses.session_id          
+     WHERE er.session_id > 50          
+     ORDER BY er.cpu_time DESC ,        
+     er.blocking_session_id        
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'         
+     -- Change SQL Server Email notification code here        
+     EXEC msdb.dbo.sp_send_dbmail         
+     --@recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@relianceada.com;younus.dalvi@cloverinfotech.com;Sachin.Y.Jadhav@relianceada.com',  
+       @recipients='Rlife.itsqldba@relianceada.com;',
+     @profile_name = 'IT SQL DBA',            
+     @subject = '10.126.143.47 :Last 5 Minutes Avg CPU Utilization Over 70%',        
+     @body = @tableHTML,@body_format = 'HTML';        
+     End
+
+
+
+
+
+GO
+
+--------------------------------------------------------------------------------------------------------------------------
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Alerts_Long_Runquery]    Script Date: 11/22/2016 7:56:28 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  
+    
+--select * from msdb..sysmail_profile                  
+CREATE procedure [dbo].[Alerts_Long_Runquery]                  
+as                 
+DECLARE @tableHTML  NVARCHAR(MAX)     
+if(    
+SELECT  count(req.session_id)    
+FROM sys.dm_exec_requests req          
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext          
+where req.status in ('RUNNING','SUSPENDED','RUNNABLE') and req.command<>'BACKUP DATABASE'    
+AND ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1)>=1    
+begin             
+print 'CPU Alert Condition True, Sending Email..'                 
+SET @tableHTML =                      
+N'<H1 bgcolor="green">Long Running Query</H1>' +                      
+N'<H2 bgcolor="green">Query Details</H2>' +                     
+ N'<table border="1">' +                    
+   N'<tr bgcolor="green"><th>Query</th><th>Session_Id</th><th>Status</th><th>Command</th><th>Database</th><th>Start-Time</th>'+                  
+   CAST ((    
+   SELECT           
+  td=sqltext.TEXT,'',          
+  td=req.session_id,'',          
+  td=req.status,'',          
+  td=req.command,'',          
+  td=Db_name(req.database_ID),'',          
+  td=req.start_time,''          
+ FROM sys.dm_exec_requests req          
+CROSS APPLY sys.dm_exec_sql_text(sql_handle) AS sqltext          
+where ((DATEPART(Hour,getdate())-(DATEPART(HOUR,req.start_time))))>1           
+AND status in ('RUNNING','SUSPENDED','RUNNABLE')  and req.command<>'BACKUP DATABASE'         
+     FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'                   
+     -- Change SQL Server Email notification code here                  
+     EXEC msdb.dbo.sp_send_dbmail                   
+    @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@rcap.co.in;younus.dalvi@cloverinfotech.com',                  
+ --@recipients='Rlife.itsqldba@relianceada.com;',                  
+     @profile_name = 'IT SQL DBA',                      
+     @subject = 'Query Running More than 1 Hour on 10.126.143.47 server',                  
+     @body = @tableHTML,@body_format = 'HTML';                  
+     end          
+    
+    
+   
+GO
+
+-------------------------------------------------------------------------------------------------------------------------
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Alerts_More_Sessions]    Script Date: 11/22/2016 7:56:59 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+--select * from msdb..sysmail_profile                  
+CREATE procedure [dbo].[Alerts_More_Sessions]                  
+as                 
+DECLARE @tableHTML  NVARCHAR(MAX)     
+DECLARE @tableHTML2  NVARCHAR(MAX)     
+DECLARE @vBody NVARCHAR(MAX)     
+if(    
+select COUNT(session_id) as cnt from sys.dm_exec_sessions where status<>'sleeping')>=500    
+begin             
+print 'Session Alert Condition True, Sending Email..'                 
+SET @tableHTML =                      
+N'<H1 bgcolor="green">Session Details</H1>' +                      
+--N'<H2 bgcolor="green">Query Details</H2>' +                     
+ N'<table border="1">' +                    
+   N'<tr bgcolor="green"><th>Login_Name</th><th>Status</th><th>SessionCount</th>'+    
+   CAST ( (           
+       
+select     
+td=login_name,'',    
+td=status,'',    
+td=COUNT(session_id),''    
+ from sys.dm_exec_sessions where status<>'sleeping'    
+group by login_name,status    
+order by COUNT(session_id) desc    
+    FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'                   
+SET @tableHTML2 =                      
+N'<H1 bgcolor="green">Session Count</H1>' +                      
+--N'<H2 bgcolor="green">Query Details</H2>' +                     
+ N'<table border="1">' +                    
+   N'<tr bgcolor="green"><th>Total_Sessions</th>'+    
+   CAST ( (           
+       
+select     
+td =COUNT(1)    
+ from sys.dm_exec_sessions where status<>'sleeping'    
+    FOR XML PATH('tr'), TYPE )AS NVARCHAR(MAX))+N'</table>'                   
+Set @vBody=@tableHTML+@tableHTML2    
+     -- Change SQL Server Email notification code here                  
+     EXEC msdb.dbo.sp_send_dbmail                   
+ @recipients='Rlife.itsqldba@relianceada.com;Mustufa.Rangwala@relianceada.com;tushar.h.gaikwad@rcap.co.in;younus.dalvi@cloverinfotech.com;devendra.singh@cloverinfotech.com',    
+     
+ --@recipients='Rlife.itsqldba@relianceada.com;',                  
+     @profile_name = 'IT SQL DBA',                      
+     @subject = 'More than 500 Session on 10.126.143.47 Server',                  
+     @body = @vBody,@body_format = 'HTML';                  
+     end          
+    
+    
+    
+
+
+GO
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[Disk_Utilization]    Script Date: 11/22/2016 7:57:16 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+    
+CREATE proc [dbo].[Disk_Utilization]    
+as    
+    
+Set nocount on    
+    
+DECLARE @tbl_Drive TABLE (id INT IDENTITY(1,1), Drive VARCHAR(50),Free_space NUMERIC(18,4),    
+        Total_Space NUMERIC(18,4))    
+    
+DECLARE @cnt INT, @lmt INT, @drive VARCHAR(50), @val  NUMERIC(18,4)     
+    
+        INSERT INTO @tbl_Drive (Drive ,Free_space) EXEC xp_fixeddrives     
+            
+        SET @lmt = (select MAX(id) as a FROM @tbl_Drive)     
+    
+        SET @cnt = 1    
+    
+        WHILE @cnt <= @lmt    
+        BEGIN    
+                SET @drive = (select 'fsutil volume diskfree '+Drive+':' as b FROM @tbl_Drive WHERE ID = @cnt)    
+    
+                DECLARE @tbl_CMDSHELL TABLE (val varchar(150) )     
+                    
+                INSERT INTO @tbl_CMDSHELL (val) EXEC XP_CMDSHELL @drive    
+    
+                SET @val = (select CAST(LTRIM(RTRIM(SUBSTRING(val,CHARINDEX(':',val)+1,LEN(val)))) AS NUMERIC(18,4)) as c FROM @tbl_CMDSHELL WHERE val LIKE 'total # of bytes%')     
+                SET @val = @val/1024/1024/1024    
+    
+    
+                UPDATE @tbl_Drive SET Total_Space = @val WHERE id = @cnt    
+                DELETE FROM @tbl_CMDSHELL    
+    
+    
+                SET @cnt = @cnt+1    
+        END    
+    
+    
+        SELECT '143.47' as ServIP, @@SERVERNAME SVRName, Drive, Total_Space AS Total_Space_GB, (Free_space)/1024 Free_space_GB, (((Free_space)/1024)*100/Total_Space) as FreePercent,    
+        100 - (((Free_space)/1024)*100/Total_Space) as UsedPercent, GETDATE() Dt FROM @tbl_Drive    
+            
+set nocount off 
+GO
+
+-------------------------------------------------------------------------------------------------------------------------------
+
+
+USE [master]
+GO
+
+/****** Object:  StoredProcedure [dbo].[sp_help_revlogin]    Script Date: 11/22/2016 7:57:36 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE PROCEDURE [dbo].[sp_help_revlogin] @login_name sysname = NULL AS
+DECLARE @name sysname
+DECLARE @type varchar (1)
+DECLARE @hasaccess int
+DECLARE @denylogin int
+DECLARE @is_disabled int
+DECLARE @PWD_varbinary  varbinary (256)
+DECLARE @PWD_string  varchar (514)
+DECLARE @SID_varbinary varbinary (85)
+DECLARE @SID_string varchar (514)
+DECLARE @tmpstr  varchar (1024)
+DECLARE @is_policy_checked varchar (3)
+DECLARE @is_expiration_checked varchar (3)
+
+DECLARE @defaultdb sysname
+ 
+IF (@login_name IS NULL)
+  DECLARE login_curs CURSOR FOR
+
+      SELECT p.sid, p.name, p.type, p.is_disabled, p.default_database_name, l.hasaccess, l.denylogin FROM 
+sys.server_principals p LEFT JOIN sys.syslogins l
+      ON ( l.name = p.name ) WHERE p.type IN ( 'S', 'G', 'U' ) AND p.name <> 'sa'
+ELSE
+  DECLARE login_curs CURSOR FOR
+
+
+      SELECT p.sid, p.name, p.type, p.is_disabled, p.default_database_name, l.hasaccess, l.denylogin FROM 
+sys.server_principals p LEFT JOIN sys.syslogins l
+      ON ( l.name = p.name ) WHERE p.type IN ( 'S', 'G', 'U' ) AND p.name = @login_name
+OPEN login_curs
+
+FETCH NEXT FROM login_curs INTO @SID_varbinary, @name, @type, @is_disabled, @defaultdb, @hasaccess, @denylogin
+IF (@@fetch_status = -1)
+BEGIN
+  PRINT 'No login(s) found.'
+  CLOSE login_curs
+  DEALLOCATE login_curs
+  RETURN -1
+END
+SET @tmpstr = '/* sp_help_revlogin script '
+PRINT @tmpstr
+SET @tmpstr = '** Generated ' + CONVERT (varchar, GETDATE()) + ' on ' + @@SERVERNAME + ' */'
+PRINT @tmpstr
+PRINT ''
+WHILE (@@fetch_status <> -1)
+BEGIN
+  IF (@@fetch_status <> -2)
+  BEGIN
+    PRINT ''
+    SET @tmpstr = '-- Login: ' + @name
+    PRINT @tmpstr
+    IF (@type IN ( 'G', 'U'))
+    BEGIN -- NT authenticated account/group
+
+      SET @tmpstr = 'CREATE LOGIN ' + QUOTENAME( @name ) + ' FROM WINDOWS WITH DEFAULT_DATABASE = [' + @defaultdb + ']'
+    END
+    ELSE BEGIN -- SQL Server authentication
+        -- obtain password and sid
+            SET @PWD_varbinary = CAST( LOGINPROPERTY( @name, 'PasswordHash' ) AS varbinary (256) )
+        EXEC sp_hexadecimal @PWD_varbinary, @PWD_string OUT
+        EXEC sp_hexadecimal @SID_varbinary,@SID_string OUT
+ 
+        -- obtain password policy state
+        SELECT @is_policy_checked = CASE is_policy_checked WHEN 1 THEN 'ON' WHEN 0 THEN 'OFF' ELSE NULL END FROM sys.sql_logins WHERE name = @name
+        SELECT @is_expiration_checked = CASE is_expiration_checked WHEN 1 THEN 'ON' WHEN 0 THEN 'OFF' ELSE NULL END FROM sys.sql_logins WHERE name = @name
+ 
+            SET @tmpstr = 'CREATE LOGIN ' + QUOTENAME( @name ) + ' WITH PASSWORD = ' + @PWD_string + ' HASHED, SID = ' + @SID_string + ', DEFAULT_DATABASE = [' + @defaultdb + ']'
+
+        IF ( @is_policy_checked IS NOT NULL )
+        BEGIN
+          SET @tmpstr = @tmpstr + ', CHECK_POLICY = ' + @is_policy_checked
+        END
+        IF ( @is_expiration_checked IS NOT NULL )
+        BEGIN
+          SET @tmpstr = @tmpstr + ', CHECK_EXPIRATION = ' + @is_expiration_checked
+        END
+    END
+    IF (@denylogin = 1)
+    BEGIN -- login is denied access
+      SET @tmpstr = @tmpstr + '; DENY CONNECT SQL TO ' + QUOTENAME( @name )
+    END
+    ELSE IF (@hasaccess = 0)
+    BEGIN -- login exists but does not have access
+      SET @tmpstr = @tmpstr + '; REVOKE CONNECT SQL TO ' + QUOTENAME( @name )
+    END
+    IF (@is_disabled = 1)
+    BEGIN -- login is disabled
+      SET @tmpstr = @tmpstr + '; ALTER LOGIN ' + QUOTENAME( @name ) + ' DISABLE'
+    END
+    PRINT @tmpstr
+  END
+
+  FETCH NEXT FROM login_curs INTO @SID_varbinary, @name, @type, @is_disabled, @defaultdb, @hasaccess, @denylogin
+   END
+CLOSE login_curs
+DEALLOCATE login_curs
+RETURN 0
+
+GO
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
